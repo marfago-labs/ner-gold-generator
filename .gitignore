@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Packaging
+*.egg-info/
+dist/
+build/
+
+# Tests & coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Secrets
+.env
+.env.local
+
+# Generated datasets (copy into ner-detector manually)
+output/
+
+# OS & editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

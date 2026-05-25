@@ -1,0 +1,18 @@
+# Gitleaks config for ner-gold-generator (CI + pre-commit).
+# https://github.com/gitleaks/gitleaks
+
+title = "ner-gold-generator"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Placeholders, examples, and test fixtures (not real secrets)"
+paths = [
+  '''(?:^|/)\.env\.example$''',
+  '''(?:^|/)docs/configuration\.md$''',
+  '''(?:^|/)tests/''',
+]
+regexes = [
+  '''sk-or-\.\.\.''',
+]
