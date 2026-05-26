@@ -12,7 +12,13 @@ import ner_gold_generator.build_gold as build_gold_mod
 import ner_gold_generator.manual_entities as manual_mod
 from ner_gold_generator import env as env_module
 from ner_gold_generator.build_gold import _cli_error_message
-from ner_gold_generator.progress import Progress, _fit_status_line, short_model_label
+from ner_gold_generator.progress import (
+    Progress,
+    _fit_status_line,
+    format_skip_error,
+    render_bar,
+    short_model_label,
+)
 
 
 def test_cli_error_message_errno2_hint() -> None:
@@ -42,14 +48,32 @@ def test_progress_status_prefix_format() -> None:
     assert Progress.status_prefix(10, 10) == "10/10 (100%)"
 
 
+def test_format_skip_error_extracts_validation_surfaces() -> None:
+    err = (
+        "Synthetic LLM failed (model='m', reason=validation, "
+        "llm_calls=7/7, provider_failures=0/2, validation_failures=5/5).\n"
+        "  Surface 'pre-training' appears 2 times (expected 1)"
+    )
+    formatted = format_skip_error(err)
+    assert "(attempt 7/7 · validation 5/5)" in formatted
+    assert "Surface 'pre-training' appears 2 times (expected 1)" in formatted
+
+
+def test_render_bar_half_and_full() -> None:
+    assert render_bar(0, 10, width=10) == "[----------]"
+    assert render_bar(5, 10, width=10) == "[#####-----]"
+    assert render_bar(10, 10, width=10) == "[##########]"
+
+
 def test_progress_track_updates_bar(capsys) -> None:
     prog = Progress(quiet=False)
-    prog._tty_bar = False  # deterministic line-based output in tests
+    prog._tty_bar = False  # line-based output in tests (no \\r refresh)
     with prog.track(2, label="test") as tick:
         tick(1, detail="first")
         tick(2, detail="second")
     err = capsys.readouterr().err
     assert "test: 2 total" in err
+    assert "[#" in err
     assert "(50%)" in err
     assert "first" in err
     assert "second" in err
@@ -75,11 +99,12 @@ def test_fit_status_line_truncates_long_detail() -> None:
 
 def test_progress_update_bar_prints_line(capsys) -> None:
     prog = Progress(quiet=False)
+    prog._tty_bar = False
     prog.update_bar(1, 2, detail="working")
     err = capsys.readouterr().err
+    assert "[#" in err
     assert "1/2 (50%)" in err
     assert "working" in err
-    assert "[" not in err
 
 
 def test_build_arxiv_gold_llm_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -234,6 +259,7 @@ def test_main_prints_statistics_on_stderr(
     assert "statistics:" in captured.err
     assert "documents:" in captured.err
     assert "entity plan:" in captured.err
+    assert "elapsed:" in captured.err
 
 
 def test_main_manual_writes_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -302,7 +328,13 @@ def test_progress_log(capsys) -> None:
     assert "status" in capsys.readouterr().err
 
 
-def test_progress_verbose_log(capsys) -> None:
+def test_progress_verbose_log(capsys, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NER_GOLD_LOG_STDERR", "1")
+    monkeypatch.setenv("NER_GOLD_LOG_FILE", "")
+    import ner_gold_generator.progress as progress_mod
+
+    progress_mod._LOGGER.handlers.clear()
+    progress_mod._LOGGER = progress_mod.get_logger(progress_mod.__name__)
     Progress(quiet=False, verbose=True).verbose_log("loading docs")
     assert "verbose: loading docs" in capsys.readouterr().err
 
@@ -367,7 +399,18 @@ def test_build_llm_empty_docs() -> None:
         )
 
 
-def test_main_verbose_prints_step_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_main_verbose_prints_step_logs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("NER_GOLD_LOG_STDERR", "1")
+    monkeypatch.setenv("NER_GOLD_LOG_FILE", "")
+    import ner_gold_generator.llm_client as llm_client_mod
+    import ner_gold_generator.progress as progress_mod
+
+    progress_mod._LOGGER.handlers.clear()
+    progress_mod._LOGGER = progress_mod.get_logger(progress_mod.__name__)
+    llm_client_mod._LOGGER.handlers.clear()
+    llm_client_mod._LOGGER = llm_client_mod.get_logger(llm_client_mod.__name__)
     smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.json"
     out = tmp_path / "gold.jsonl"
     code = build_gold_mod.main(

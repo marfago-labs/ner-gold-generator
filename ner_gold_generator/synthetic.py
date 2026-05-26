@@ -2,20 +2,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import random
-from collections.abc import Callable
-from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from ner_gold_generator.interrupt import BuildInterrupted
 from ner_gold_generator.labeling import LlmGoldSettings, build_chat_client
+from ner_gold_generator.llm_client import build_async_chat_client
+from ner_gold_generator.logger import get_logger
 from ner_gold_generator.progress import Progress, short_model_label
 from ner_gold_generator.synthetic_compose import (
     assemble_procedural_text,
     audit_plan_entity_usage,
     config_summary_for_meta,
     entities_from_plan,
-    generate_text_with_llm,
+    generate_text_with_llm_async,
 )
 from ner_gold_generator.synthetic_config import (
     SyntheticConfig,
@@ -23,6 +26,40 @@ from ner_gold_generator.synthetic_config import (
     validate_synthetic_config,
 )
 from ner_gold_generator.synthetic_generators import plan_entities_for_document
+
+_LOGGER = get_logger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedDocument:
+    """A synthetic document that failed after all LLM retries."""
+
+    id: str
+    document_index: int
+    document_seed: int
+    error: str
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "document_index": self.document_index,
+            "document_seed": self.document_seed,
+            "error": self.error,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class SyntheticBuildResult:
+    """Outcome of a synthetic build (successful rows plus skipped documents)."""
+
+    examples: list[dict]
+    skipped: list[SkippedDocument]
+
+    def __len__(self) -> int:
+        return len(self.examples)
+
+    def __iter__(self) -> Iterator[dict]:
+        return iter(self.examples)
 
 
 def _build_synthetic_row(
@@ -60,7 +97,7 @@ def build_examples_synthetic(
     settings: LlmGoldSettings | None = None,
     mock: bool = False,
     progress: Progress | None = None,
-) -> list[dict]:
+) -> SyntheticBuildResult:
     """Generate gold rows from a synthetic config (procedural or LLM glue).
 
     Entity spans come from the pre-planned surfaces, not from free-form LLM NER.
@@ -72,10 +109,10 @@ def build_examples_synthetic(
         progress: Optional stderr progress helper.
 
     Returns:
-        Gold example dicts with ``gold_source=synthetic`` and ``synthetic_meta``.
+        Successful gold rows and any documents skipped after LLM retries.
 
     Raises:
-        ValueError: If ``engine`` is unknown or LLM validation fails.
+        ValueError: If ``engine`` is unknown or every document fails.
     """
     validate_synthetic_config(config)
     if config.num_documents < 1:
@@ -94,6 +131,7 @@ def build_examples_synthetic(
         raise ValueError("engine=llm requires OPENROUTER_API_KEY in .env (or use --mock for tests)")
 
     examples_by_idx: dict[int, dict] = {}
+    skipped: list[SkippedDocument] = []
     docs: list[tuple[int, int, str, list]] = []
     for doc_idx in range(total):
         doc_seed = rng.randint(0, 2**31 - 1)
@@ -144,62 +182,32 @@ def build_examples_synthetic(
                     prog.verbose_log(
                         f"{doc_id}: planned {len(plan)} entities (seed={doc_seed}, engine={text_engine})"
                     )
-
-                def run_one(
-                    doc_idx: int, doc_seed: int, doc_id: str, plan: list
-                ) -> tuple[int, dict, list[str]]:
-                    elapsed_logs: list[str] = []
-                    worker_chat = build_chat_client(
-                        llm_settings,
-                        mock=False,
-                        model_id=config.llm.model.strip(),
-                        timeout_seconds=config.llm.timeout_seconds,
-                    )
-
-                    def on_call_elapsed(attempt: int, seconds: float, outcome: str) -> None:
-                        elapsed_logs.append(
-                            f"{doc_id}: LLM call {attempt}/{config.llm.max_attempts} "
-                            f"{outcome} in {seconds:.1f}s"
-                        )
-
-                    text = generate_text_with_llm(
-                        plan,
-                        config,
-                        settings=llm_settings,
-                        mock=False,
-                        client=worker_chat,
-                        on_status=None,
-                        on_call_elapsed=on_call_elapsed,
-                        request_delay_seconds=config.llm.request_delay_seconds,
-                    )
-                    row = _build_synthetic_row(
+                llm_out, llm_skipped = asyncio.run(
+                    _run_llm_documents_async(
+                        docs,
                         config=config,
-                        doc_id=doc_id,
-                        doc_idx=doc_idx,
-                        doc_seed=doc_seed,
-                        plan=plan,
-                        text=text,
-                        text_engine="llm",
+                        llm_settings=llm_settings,
+                        max_workers=max_workers,
+                        prog=prog,
+                        model_short=model_short,
+                        tick=tick,
                     )
-                    return doc_idx, row, elapsed_logs
-
-                _run_llm_documents_parallel(
-                    docs,
-                    run_one=run_one,
-                    max_workers=max_workers,
-                    examples_by_idx=examples_by_idx,
-                    prog=prog,
-                    model_short=model_short,
-                    tick=tick,
-                    total=total,
                 )
+                examples_by_idx.update(llm_out)
+                skipped.extend(llm_skipped)
     except KeyboardInterrupt as exc:
         raise BuildInterrupted(
             _ordered_partial_examples(examples_by_idx, total),
             completed=len(examples_by_idx),
             total=total,
         ) from exc
-    return [examples_by_idx[i] for i in range(total)]
+    examples = [examples_by_idx[i] for i in sorted(examples_by_idx)]
+    if not examples and skipped:
+        first = skipped[0].error.replace("\n", " ")
+        raise ValueError(f"All {len(skipped)} synthetic documents failed (first error: {first})")
+    if skipped:
+        prog.log(f"skipped {len(skipped)}/{total} documents after LLM retries (see gold.log)")
+    return SyntheticBuildResult(examples=examples, skipped=skipped)
 
 
 def _ordered_partial_examples(examples_by_idx: dict[int, dict], total: int) -> list[dict]:
@@ -207,108 +215,127 @@ def _ordered_partial_examples(examples_by_idx: dict[int, dict], total: int) -> l
     return [examples_by_idx[i] for i in range(total) if i in examples_by_idx]
 
 
-def _record_completed_llm_doc(
-    *,
-    examples_by_idx: dict[int, dict],
-    doc_idx: int,
-    row: dict,
-    elapsed_logs: list[str],
-    prog: Progress,
-    model_short: str,
-    tick: Callable[[int, str], None],
-    completed: int,
-) -> int:
-    """Store one finished LLM document and update progress (main thread only)."""
-    examples_by_idx[doc_idx] = row
-    for line in elapsed_logs:
-        prog.verbose_log(line)
-    completed += 1
-    doc_id = row["id"]
-    prog.verbose_log(
-        f"{doc_id}: finalized with {len(row['entities'])} entities (model={model_short})"
-    )
-    tick(completed, f"{doc_id} {len(row['entities'])} entities (llm)")
-    return completed
-
-
-def _cancel_futures(futures: list[Future]) -> None:
-    """Best-effort cancel for tasks not yet running."""
-    for future in futures:
-        future.cancel()
-
-
-def _shutdown_executor(pool: ThreadPoolExecutor, *, cancel_pending: bool) -> None:
-    """Stop the pool without leaving worker threads dangling."""
-    pool.shutdown(wait=not cancel_pending, cancel_futures=cancel_pending)
-
-
-def _run_llm_documents_parallel(
+async def _run_llm_documents_async(
     docs: list[tuple[int, int, str, list]],
     *,
-    run_one: Callable[[int, int, str, list], tuple[int, dict, list[str]]],
+    config: SyntheticConfig,
+    llm_settings: LlmGoldSettings,
     max_workers: int,
-    examples_by_idx: dict[int, dict],
     prog: Progress,
     model_short: str,
     tick: Callable[[int, str], None],
-    total: int,
-) -> None:
-    """Run LLM glue for each document with a bounded thread pool.
+) -> tuple[dict[int, dict], list[SkippedDocument]]:
+    """Run LLM glue for each document using asyncio concurrency."""
 
-    Progress updates and shared dict writes happen on the main thread only.
-    The pool is always shut down (and pending work cancelled) on error or interrupt.
-    When *max_workers* is 1, documents run sequentially (no thread pool).
-    """
-    if max_workers <= 1:
-        completed = 0
-        for doc_idx, doc_seed, doc_id, plan in docs:
-            doc_idx, row, elapsed_logs = run_one(doc_idx, doc_seed, doc_id, plan)
-            completed = _record_completed_llm_doc(
-                examples_by_idx=examples_by_idx,
-                doc_idx=doc_idx,
-                row=row,
-                elapsed_logs=elapsed_logs,
-                prog=prog,
-                model_short=model_short,
-                tick=tick,
-                completed=completed,
-            )
-        return
-
-    pool = ThreadPoolExecutor(max_workers=max_workers)
-    futures: list[Future[tuple[int, dict, list[str]]]] = [
-        pool.submit(run_one, doc_idx, doc_seed, doc_id, plan)
-        for doc_idx, doc_seed, doc_id, plan in docs
-    ]
+    semaphore = asyncio.Semaphore(max(1, max_workers))
     completed = 0
-    try:
-        for future in as_completed(futures):
-            doc_idx, row, elapsed_logs = future.result()
-            completed = _record_completed_llm_doc(
-                examples_by_idx=examples_by_idx,
+    out: dict[int, dict] = {}
+    skipped: list[SkippedDocument] = []
+
+    async def run_one_async(
+        doc_idx: int, doc_seed: int, doc_id: str, plan: list
+    ) -> tuple[int, str, int, dict | None, list[str], str | None]:
+        elapsed_logs: list[str] = []
+
+        try:
+            async with semaphore:
+                worker_chat = build_async_chat_client(
+                    llm_settings,
+                    model_id=config.llm.model.strip(),
+                    timeout_seconds=config.llm.timeout_seconds,
+                )
+
+                def on_call_elapsed(attempt: int, seconds: float, outcome: str) -> None:
+                    elapsed_logs.append(
+                        f"{doc_id}: LLM call {attempt}/{config.llm.max_attempts} "
+                        f"{outcome} in {seconds:.1f}s"
+                    )
+
+                text = await generate_text_with_llm_async(
+                    plan,
+                    config,
+                    settings=llm_settings,
+                    mock=False,
+                    client=worker_chat,
+                    on_status=None,
+                    on_call_elapsed=on_call_elapsed,
+                    request_delay_seconds=config.llm.request_delay_seconds,
+                    document_id=doc_id,
+                )
+
+            row = _build_synthetic_row(
+                config=config,
+                doc_id=doc_id,
                 doc_idx=doc_idx,
-                row=row,
-                elapsed_logs=elapsed_logs,
-                prog=prog,
-                model_short=model_short,
-                tick=tick,
-                completed=completed,
+                doc_seed=doc_seed,
+                plan=plan,
+                text=text,
+                text_engine="llm",
             )
+            return doc_idx, doc_id, doc_seed, row, elapsed_logs, None
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            err = str(exc).strip() or repr(exc)
+            one_line = err.replace("\n", " ").strip()
+            _LOGGER.warning("%s: skipped after LLM retries: %s", doc_id, one_line)
+            return doc_idx, doc_id, doc_seed, None, elapsed_logs, err
+
+    def _record_result(
+        doc_idx: int,
+        doc_id: str,
+        doc_seed: int,
+        row: dict | None,
+        elapsed_logs: list[str],
+        error: str | None,
+    ) -> None:
+        nonlocal completed
+        for line in elapsed_logs:
+            prog.verbose_log(line)
+        completed += 1
+        if row is not None:
+            out[doc_idx] = row
+            prog.verbose_log(
+                f"{doc_id}: finalized with {len(row['entities'])} entities (model={model_short})"
+            )
+            tick(completed, f"{doc_id} {len(row['entities'])} entities (llm)")
+            return
+        skipped.append(
+            SkippedDocument(
+                id=doc_id,
+                document_index=doc_idx,
+                document_seed=doc_seed,
+                error=error or "unknown error",
+            )
+        )
+        prog.log_skip(doc_id, error or "unknown error")
+        tick(completed, f"{doc_id} skipped")
+
+    if max_workers <= 1:
+        for doc in docs:
+            doc_idx, doc_id, doc_seed, row, elapsed_logs, error = await run_one_async(*doc)
+            _record_result(doc_idx, doc_id, doc_seed, row, elapsed_logs, error)
+        return out, skipped
+
+    tasks = [asyncio.create_task(run_one_async(*doc)) for doc in docs]
+    try:
+        for task in asyncio.as_completed(tasks):
+            doc_idx, doc_id, doc_seed, row, elapsed_logs, error = await task
+            _record_result(doc_idx, doc_id, doc_seed, row, elapsed_logs, error)
+    except asyncio.CancelledError as exc:
+        for task in tasks:
+            task.cancel()
+        raise exc
     except KeyboardInterrupt as exc:
         prog.log("interrupted: cancelling in-flight LLM calls…")
-        _cancel_futures(futures)
-        _shutdown_executor(pool, cancel_pending=True)
+        for task in tasks:
+            task.cancel()
         raise BuildInterrupted(
-            _ordered_partial_examples(examples_by_idx, total),
-            completed=len(examples_by_idx),
-            total=total,
+            _ordered_partial_examples(out, len(docs)),
+            completed=len(out),
+            total=len(docs),
         ) from exc
-    except Exception:
-        _cancel_futures(futures)
-        _shutdown_executor(pool, cancel_pending=True)
-        raise
-    else:
-        _shutdown_executor(pool, cancel_pending=False)
+    return out, skipped
 
 
 def build_examples_from_config_path(
@@ -317,7 +344,7 @@ def build_examples_from_config_path(
     settings: LlmGoldSettings | None = None,
     mock: bool = False,
     progress: Progress | None = None,
-) -> list[dict]:
+) -> SyntheticBuildResult:
     """Load config from disk and run :func:`build_examples_synthetic`."""
     config = load_synthetic_config(config_path)
     return build_examples_synthetic(

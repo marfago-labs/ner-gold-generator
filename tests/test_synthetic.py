@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from ner_gold_generator.build_gold import main
+from ner_gold_generator.llm_client import LlmRequestError
 from ner_gold_generator.synthetic import build_examples_synthetic
 from ner_gold_generator.synthetic_compose import (
     assemble_mock_llm_text,
@@ -151,7 +152,7 @@ def test_build_examples_synthetic_llm_builds_worker_clients(
         def __init__(self) -> None:
             self.calls = 0
 
-        def complete_json(
+        async def complete_json(
             self,
             *,
             system: str,
@@ -185,11 +186,11 @@ def test_build_examples_synthetic_llm_builds_worker_clients(
                     plan.append(PlannedEntity(surface, label))
             return {"text": assemble_mock_llm_text(plan, config)}
 
-    def _fake_build(*_args: object, **_kwargs: object) -> _PromptClient:
+    def _fake_build_async(*_args: object, **_kwargs: object) -> _PromptClient:
         build_calls.append(1)
         return _PromptClient()
 
-    monkeypatch.setattr(syn_mod, "build_chat_client", _fake_build)
+    monkeypatch.setattr(syn_mod, "build_async_chat_client", _fake_build_async)
     monkeypatch.setattr(
         "ner_gold_generator.llm_client.verify_llm_installation",
         lambda: None,
@@ -202,8 +203,7 @@ def test_build_examples_synthetic_llm_builds_worker_clients(
         ),
         mock=False,
     )
-    # one client for upfront validation + one per document worker
-    assert len(build_calls) == 3
+    assert len(build_calls) == 2
     assert len(examples) == 2
 
 
@@ -333,6 +333,158 @@ def test_generate_text_with_llm_request_delay_between_attempts(
         request_delay_seconds=config.llm.request_delay_seconds,
     )
     assert sleeps == [pytest.approx(0.01)]
+
+
+def test_validate_llm_text_or_log_writes_failure_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ner_gold_generator import synthetic_compose as compose_mod
+
+    log_path = tmp_path / "failures.log"
+    monkeypatch.setenv("NER_GOLD_LOG_FILE", str(log_path))
+    monkeypatch.setenv("NER_GOLD_LOG_STDERR", "0")
+    compose_mod._LOGGER.handlers.clear()
+    compose_mod._LOGGER = compose_mod.get_logger(compose_mod.__name__)
+
+    plan = [PlannedEntity("BERT", "model")]
+    err = compose_mod._validate_llm_text_or_log(
+        "BERT and BERT again",
+        plan,
+        document_id="synthetic-test-00001",
+        model_id="test/model",
+        attempt=2,
+        call_budget=7,
+    )
+    assert err is not None
+    log_text = log_path.read_text(encoding="utf-8")
+    assert "synthetic-test-00001" in log_text
+    assert "BERT and BERT again" in log_text
+    assert "appears 2 times" in log_text
+
+
+def test_generate_text_with_llm_respects_validation_retry_budget() -> None:
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": {
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
+                "provider_max_attempts": 5,
+                "validation_max_attempts": 2,
+            },
+        }
+    )
+    plan = [PlannedEntity("BERT", "model")]
+
+    class _AlwaysInvalid:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(
+            self,
+            *,
+            system: str,
+            user: str,
+            temperature: float,
+            call_label: str | None = None,
+        ) -> dict:
+            del system, user, temperature, call_label
+            self.calls += 1
+            return {"text": "no matching entities"}
+
+    client = _AlwaysInvalid()
+    with pytest.raises(ValueError, match="reason=validation"):
+        generate_text_with_llm(plan, config, settings=None, mock=False, client=client)
+    assert client.calls == 2
+
+
+def test_invalid_json_counts_as_provider_failure() -> None:
+    from ner_gold_generator.llm_client import InvalidLlmResponseError
+
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": {
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
+                "provider_max_attempts": 2,
+                "validation_max_attempts": 5,
+            },
+        }
+    )
+    plan = [PlannedEntity("BERT", "model")]
+
+    class _BadJson:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(
+            self,
+            *,
+            system: str,
+            user: str,
+            temperature: float,
+            call_label: str | None = None,
+        ) -> dict:
+            del system, user, temperature, call_label
+            self.calls += 1
+            raise InvalidLlmResponseError(
+                "Model 'm' returned invalid JSON: Expecting value",
+                raw="not json at all",
+            )
+
+    client = _BadJson()
+    with pytest.raises(ValueError, match="reason=provider"):
+        generate_text_with_llm(plan, config, settings=None, mock=False, client=client)
+    assert client.calls == 2
+
+
+def test_generate_text_with_llm_respects_provider_retry_budget() -> None:
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": {
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
+                "provider_max_attempts": 2,
+                "validation_max_attempts": 5,
+            },
+        }
+    )
+    plan = [PlannedEntity("BERT", "model")]
+
+    class _AlwaysRateLimited:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete_json(
+            self,
+            *,
+            system: str,
+            user: str,
+            temperature: float,
+            call_label: str | None = None,
+        ) -> dict:
+            del system, user, temperature, call_label
+            self.calls += 1
+            raise LlmRequestError("rate limit", retryable=True, retry_after_seconds=0.0)
+
+    client = _AlwaysRateLimited()
+    with pytest.raises(ValueError, match="reason=provider"):
+        generate_text_with_llm(plan, config, settings=None, mock=False, client=client)
+    assert client.calls == 2
+
+
+def test_parse_llm_retry_budgets_fallback_to_max_attempts() -> None:
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": {
+                "model": "meta-llama/llama-3.3-70b-instruct:free",
+                "max_attempts": 4,
+            },
+        }
+    )
+    assert config.llm.provider_max_attempts == 4
+    assert config.llm.validation_max_attempts == 4
 
 
 def test_generate_text_with_llm_on_status_before_call() -> None:
@@ -603,7 +755,7 @@ def test_llm_engine_with_settings_mock_llm() -> None:
         settings=LlmGoldSettings(),
         mock=True,
     )
-    assert examples[0]["entities"]
+    assert examples.examples[0]["entities"]
 
 
 def test_lexical_collision_suffix() -> None:

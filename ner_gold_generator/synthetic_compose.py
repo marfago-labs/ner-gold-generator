@@ -2,25 +2,218 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import random
 import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import NoReturn
 
 from ner_gold_generator.labeling import LlmGoldSettings, build_chat_client
 from ner_gold_generator.llm_client import (
+    AsyncChatClient,
     ChatClient,
+    InvalidLlmResponseError,
     LlmRequestError,
     MockChatClient,
     describe_llm_api_error,
     retry_after_seconds_from_error,
     wait_for_retry,
 )
+from ner_gold_generator.logger import get_logger
 from ner_gold_generator.synthetic_config import SyntheticConfig
 from ner_gold_generator.synthetic_generators import PlannedEntity
 from ner_gold_generator.validate import index_unique_span
+
+_LOGGER = get_logger(__name__)
+
+
+def _llm_call_budget(provider_max_attempts: int, validation_max_attempts: int) -> int:
+    return provider_max_attempts + validation_max_attempts
+
+
+def _format_synthetic_llm_failure(
+    *,
+    model_id: str,
+    reason: str,
+    last_error: str,
+    llm_calls: int,
+    provider_max_attempts: int,
+    validation_max_attempts: int,
+    provider_failures: int,
+    validation_failures: int,
+    hint: str = "",
+) -> str:
+    """Build a structured failure message (parsed by :func:`format_skip_error`)."""
+    call_budget = _llm_call_budget(provider_max_attempts, validation_max_attempts)
+    return (
+        "Synthetic LLM failed "
+        f"(model={model_id!r}, reason={reason}, "
+        f"llm_calls={llm_calls}/{call_budget}, "
+        f"provider_failures={provider_failures}/{provider_max_attempts}, "
+        f"validation_failures={validation_failures}/{validation_max_attempts}).\n"
+        f"  {last_error}{hint}"
+    )
+
+
+def _raise_synthetic_llm_failed(
+    *,
+    model_id: str,
+    reason: str,
+    last_error: str,
+    llm_calls: int,
+    provider_max_attempts: int,
+    validation_max_attempts: int,
+    provider_failures: int,
+    validation_failures: int,
+    hint: str = "",
+    document_id: str | None = None,
+    last_text: str | None = None,
+    plan: list[PlannedEntity] | None = None,
+) -> NoReturn:
+    _log_synthetic_failure(
+        document_id=document_id,
+        model_id=model_id,
+        attempt=llm_calls,
+        call_budget=_llm_call_budget(provider_max_attempts, validation_max_attempts),
+        failure_kind=f"final_{reason}",
+        message=last_error,
+        text=last_text,
+        plan=plan,
+    )
+    raise ValueError(
+        _format_synthetic_llm_failure(
+            model_id=model_id,
+            reason=reason,
+            last_error=last_error,
+            llm_calls=llm_calls,
+            provider_max_attempts=provider_max_attempts,
+            validation_max_attempts=validation_max_attempts,
+            provider_failures=provider_failures,
+            validation_failures=validation_failures,
+            hint=hint,
+        )
+    )
+
+
+def _log_synthetic_failure(
+    *,
+    document_id: str | None,
+    model_id: str,
+    attempt: int,
+    call_budget: int,
+    failure_kind: str,
+    message: str,
+    text: str | None = None,
+    plan: list[PlannedEntity] | None = None,
+    audit: PlanEntityUsageAudit | None = None,
+) -> None:
+    """Write a failing LLM attempt to ``gold.log`` for debugging."""
+    header = f"synthetic failure ({failure_kind})"
+    if document_id:
+        header += f" doc={document_id}"
+    header += f" model={model_id} attempt={attempt}/{call_budget}"
+    lines = [header, f"errors: {message}"]
+    if plan:
+        lines.append("planned entities:")
+        for ent in plan:
+            lines.append(f"  - [{ent.label}] {ent.surface}")
+    if audit is not None:
+        lines.append(f"occurrence_counts: {audit.occurrence_counts}")
+        if audit.missing:
+            lines.append(f"missing: {list(audit.missing)}")
+        if audit.duplicate_in_text:
+            lines.append(f"duplicate_in_text: {list(audit.duplicate_in_text)}")
+    lines.append("generated text:")
+    lines.append(text if text else "(empty)")
+    _LOGGER.warning("\n".join(lines))
+
+
+def _handle_provider_response_error(
+    exc: ValueError,
+    *,
+    document_id: str | None,
+    model_id: str,
+    attempt: int,
+    call_budget: int,
+    plan: list[PlannedEntity],
+) -> tuple[str, str]:
+    """Log a parse/API response error; return ``(message, raw_text)``."""
+    message = str(exc).strip() or repr(exc)
+    raw_text = exc.raw if isinstance(exc, InvalidLlmResponseError) else ""
+    failure_kind = (
+        "provider_json"
+        if "invalid JSON" in message or "no choices" in message
+        else "provider_parse"
+    )
+    _log_synthetic_failure(
+        document_id=document_id,
+        model_id=model_id,
+        attempt=attempt,
+        call_budget=call_budget,
+        failure_kind=failure_kind,
+        message=message,
+        text=raw_text,
+        plan=plan,
+    )
+    return message, raw_text
+
+
+def _validate_llm_text_or_log(
+    text: str,
+    plan: list[PlannedEntity],
+    *,
+    document_id: str | None,
+    model_id: str,
+    attempt: int,
+    call_budget: int,
+) -> str | None:
+    """Return an error message when validation fails (and log details); else ``None``."""
+    if not text:
+        _log_synthetic_failure(
+            document_id=document_id,
+            model_id=model_id,
+            attempt=attempt,
+            call_budget=call_budget,
+            failure_kind="validation",
+            message="empty text from LLM",
+            text="",
+            plan=plan,
+        )
+        return "empty text from LLM"
+    errors = validate_text_contains_plan(text, plan)
+    if errors:
+        msg = "; ".join(errors)
+        _log_synthetic_failure(
+            document_id=document_id,
+            model_id=model_id,
+            attempt=attempt,
+            call_budget=call_budget,
+            failure_kind="validation",
+            message=msg,
+            text=text,
+            plan=plan,
+        )
+        return msg
+    audit = audit_plan_entity_usage(text, plan)
+    if audit.used_exactly_once != audit.planned:
+        msg = f"audit mismatch: used={audit.used_exactly_once} planned={audit.planned}"
+        _log_synthetic_failure(
+            document_id=document_id,
+            model_id=model_id,
+            attempt=attempt,
+            call_budget=call_budget,
+            failure_kind="validation",
+            message=msg,
+            text=text,
+            plan=plan,
+            audit=audit,
+        )
+        return msg
+    return None
+
 
 _FILLER_SENTENCES = (
     "Further analysis confirms the trend across multiple runs.",
@@ -220,6 +413,7 @@ def generate_text_with_llm(
     on_status: Callable[[str], None] | None = None,
     on_call_elapsed: Callable[[int, float, str], None] | None = None,
     request_delay_seconds: float = 0.0,
+    document_id: str | None = None,
 ) -> str:
     """Request prose from an LLM (or mock) embedding all planned entities."""
     if mock:
@@ -241,14 +435,22 @@ def generate_text_with_llm(
         max_chars=config.text_length.max_chars,
     )
     last_error = "no attempts"
-    max_attempts = config.llm.max_attempts
-    for attempt in range(1, max_attempts + 1):
+    last_error_kind = "provider"
+    provider_failures = 0
+    validation_failures = 0
+    provider_max_attempts = config.llm.provider_max_attempts
+    validation_max_attempts = config.llm.validation_max_attempts
+    call_budget = _llm_call_budget(provider_max_attempts, validation_max_attempts)
+    attempt = 0
+    last_text: str | None = None
+    while True:
+        attempt += 1
         if attempt > 1 and request_delay_seconds > 0:
             if on_status is not None:
                 on_status(f"waiting {request_delay_seconds:.0f}s before retry")
             time.sleep(request_delay_seconds)
         if on_attempt is not None:
-            on_attempt(attempt, max_attempts)
+            on_attempt(attempt, call_budget)
         if on_status is not None:
             on_status("calling OpenRouter…")
         started = time.perf_counter()
@@ -257,7 +459,7 @@ def generate_text_with_llm(
                 system=system_prompt,
                 user=user,
                 temperature=config.llm.temperature,
-                call_label=f"attempt {attempt}/{max_attempts}",
+                call_label=f"attempt {attempt}/{call_budget}",
             )
             if on_call_elapsed is not None:
                 on_call_elapsed(attempt, time.perf_counter() - started, "ok")
@@ -265,14 +467,60 @@ def generate_text_with_llm(
             if on_call_elapsed is not None:
                 on_call_elapsed(attempt, time.perf_counter() - started, "error")
             if not exc.retryable:
-                raise ValueError(str(exc)) from exc
+                _log_synthetic_failure(
+                    document_id=document_id,
+                    model_id=model_id,
+                    attempt=attempt,
+                    call_budget=call_budget,
+                    failure_kind="provider",
+                    message=str(exc),
+                    plan=plan,
+                )
+                _raise_synthetic_llm_failed(
+                    model_id=model_id,
+                    reason="provider",
+                    last_error=str(exc),
+                    llm_calls=attempt,
+                    provider_max_attempts=provider_max_attempts,
+                    validation_max_attempts=validation_max_attempts,
+                    provider_failures=provider_failures + 1,
+                    validation_failures=validation_failures,
+                    document_id=document_id,
+                    last_text=last_text,
+                    plan=plan,
+                )
             last_error = str(exc)
+            last_error_kind = "provider"
+            provider_failures += 1
+            _log_synthetic_failure(
+                document_id=document_id,
+                model_id=model_id,
+                attempt=attempt,
+                call_budget=call_budget,
+                failure_kind="provider",
+                message=last_error,
+                plan=plan,
+            )
+            if provider_failures >= provider_max_attempts:
+                break
             wait_for_retry(exc, on_wait=on_wait)
             continue
         except ValueError as exc:
             if on_call_elapsed is not None:
                 on_call_elapsed(attempt, time.perf_counter() - started, "error")
-            last_error = str(exc)
+            last_error, raw_text = _handle_provider_response_error(
+                exc,
+                document_id=document_id,
+                model_id=model_id,
+                attempt=attempt,
+                call_budget=call_budget,
+                plan=plan,
+            )
+            last_text = raw_text or last_text
+            last_error_kind = "provider"
+            provider_failures += 1
+            if provider_failures >= provider_max_attempts:
+                break
             if on_status is not None:
                 on_status(f"retry: {last_error[:72]}")
             continue
@@ -281,8 +529,42 @@ def generate_text_with_llm(
                 on_call_elapsed(attempt, time.perf_counter() - started, "error")
             msg, retryable, _ = describe_llm_api_error(exc, model_id=model_id)
             if not retryable:
-                raise ValueError(msg) from exc
+                _log_synthetic_failure(
+                    document_id=document_id,
+                    model_id=model_id,
+                    attempt=attempt,
+                    call_budget=call_budget,
+                    failure_kind="provider",
+                    message=msg,
+                    plan=plan,
+                )
+                _raise_synthetic_llm_failed(
+                    model_id=model_id,
+                    reason="provider",
+                    last_error=msg,
+                    llm_calls=attempt,
+                    provider_max_attempts=provider_max_attempts,
+                    validation_max_attempts=validation_max_attempts,
+                    provider_failures=provider_failures + 1,
+                    validation_failures=validation_failures,
+                    document_id=document_id,
+                    last_text=last_text,
+                    plan=plan,
+                )
             last_error = msg
+            last_error_kind = "provider"
+            provider_failures += 1
+            _log_synthetic_failure(
+                document_id=document_id,
+                model_id=model_id,
+                attempt=attempt,
+                call_budget=call_budget,
+                failure_kind="provider",
+                message=last_error,
+                plan=plan,
+            )
+            if provider_failures >= provider_max_attempts:
+                break
             wrapped = LlmRequestError(
                 msg,
                 retryable=True,
@@ -293,30 +575,276 @@ def generate_text_with_llm(
             continue
 
         text = str(payload.get("text", "")).strip()
-        if not text:
-            last_error = "empty text from LLM"
-            if on_status is not None:
-                on_status(f"retry: {last_error}")
-            continue
-        errors = validate_text_contains_plan(text, plan)
-        if not errors:
-            audit = audit_plan_entity_usage(text, plan)
-            if audit.used_exactly_once != audit.planned:
-                last_error = (
-                    f"audit mismatch: used={audit.used_exactly_once} planned={audit.planned}"
-                )
-                if on_status is not None:
-                    on_status(f"retry: {last_error[:72]}")
-                continue
+        last_text = text
+        validation_error = _validate_llm_text_or_log(
+            text,
+            plan,
+            document_id=document_id,
+            model_id=model_id,
+            attempt=attempt,
+            call_budget=call_budget,
+        )
+        if validation_error is None:
             return text
-        last_error = "; ".join(errors)
+        last_error = validation_error
+        last_error_kind = "validation"
+        validation_failures += 1
+        if validation_failures >= validation_max_attempts:
+            break
         if on_status is not None:
             on_status(f"retry: {last_error[:72]}")
     hint = ""
-    if "rate limit" in last_error.lower() and max_attempts < 3:
-        hint = " Tip: increase llm.max_attempts in your synthetic config for 429 retries."
-    raise ValueError(
-        f"Synthetic LLM failed (model={model_id!r}, attempts={max_attempts}).\n  {last_error}{hint}"
+    if "rate limit" in last_error.lower() and provider_max_attempts < 3:
+        hint = (
+            " Tip: increase llm.provider_max_attempts "
+            "(or llm.max_attempts for legacy configs) for 429 retries."
+        )
+    _raise_synthetic_llm_failed(
+        model_id=model_id,
+        reason=last_error_kind,
+        last_error=last_error,
+        llm_calls=attempt,
+        provider_max_attempts=provider_max_attempts,
+        validation_max_attempts=validation_max_attempts,
+        provider_failures=provider_failures,
+        validation_failures=validation_failures,
+        hint=hint,
+        document_id=document_id,
+        last_text=last_text,
+        plan=plan,
+    )
+
+
+async def wait_for_retry_async(
+    exc: LlmRequestError,
+    *,
+    on_wait: Callable[[float, str], None] | None = None,
+    cap_seconds: float = 120.0,
+    tick_seconds: float = 5.0,
+) -> None:
+    """Async sleep for rate-limit backoff when *exc* carries ``retry_after_seconds``."""
+    if not exc.retryable or exc.retry_after_seconds is None:
+        return
+    wait = min(max(1.0, exc.retry_after_seconds + 0.5), cap_seconds)
+    remaining = wait
+    while remaining > 0:
+        step = min(max(tick_seconds, 1.0), remaining)
+        if on_wait is not None:
+            on_wait(remaining, f"rate limited — {remaining:.0f}s left")
+        await asyncio.sleep(step)
+        remaining -= step
+
+
+async def generate_text_with_llm_async(
+    plan: list[PlannedEntity],
+    config: SyntheticConfig,
+    *,
+    settings: LlmGoldSettings,
+    mock: bool,
+    client: AsyncChatClient,
+    on_attempt: Callable[[int, int], None] | None = None,
+    on_wait: Callable[[float, str], None] | None = None,
+    on_status: Callable[[str], None] | None = None,
+    on_call_elapsed: Callable[[int, float, str], None] | None = None,
+    request_delay_seconds: float = 0.0,
+    document_id: str | None = None,
+) -> str:
+    """Async variant of :func:`generate_text_with_llm` (LLM engine only)."""
+    if mock:
+        return assemble_mock_llm_text(plan, config)
+
+    model_id = config.llm.model.strip()
+    if not model_id:
+        raise ValueError("engine=llm requires llm.model in the synthetic config file")
+    system_prompt = (
+        config.llm.system_prompt.strip()
+        if config.llm.system_prompt.strip()
+        else _DEFAULT_SYNTHETIC_SYSTEM
+    )
+    user = build_synthetic_user_prompt(
+        plan,
+        domain=config.domain,
+        min_chars=config.text_length.min_chars,
+        max_chars=config.text_length.max_chars,
+    )
+    last_error = "no attempts"
+    last_error_kind = "provider"
+    provider_failures = 0
+    validation_failures = 0
+    provider_max_attempts = config.llm.provider_max_attempts
+    validation_max_attempts = config.llm.validation_max_attempts
+    call_budget = _llm_call_budget(provider_max_attempts, validation_max_attempts)
+    attempt = 0
+    last_text: str | None = None
+    while True:
+        attempt += 1
+        if attempt > 1 and request_delay_seconds > 0:
+            if on_status is not None:
+                on_status(f"waiting {request_delay_seconds:.0f}s before retry")
+            await asyncio.sleep(request_delay_seconds)
+        if on_attempt is not None:
+            on_attempt(attempt, call_budget)
+        if on_status is not None:
+            on_status("calling OpenRouter…")
+        started = time.perf_counter()
+        try:
+            payload = await client.complete_json(
+                system=system_prompt,
+                user=user,
+                temperature=config.llm.temperature,
+                call_label=f"attempt {attempt}/{call_budget}",
+            )
+            if on_call_elapsed is not None:
+                on_call_elapsed(attempt, time.perf_counter() - started, "ok")
+        except LlmRequestError as exc:
+            if on_call_elapsed is not None:
+                on_call_elapsed(attempt, time.perf_counter() - started, "error")
+            if not exc.retryable:
+                _log_synthetic_failure(
+                    document_id=document_id,
+                    model_id=model_id,
+                    attempt=attempt,
+                    call_budget=call_budget,
+                    failure_kind="provider",
+                    message=str(exc),
+                    plan=plan,
+                )
+                _raise_synthetic_llm_failed(
+                    model_id=model_id,
+                    reason="provider",
+                    last_error=str(exc),
+                    llm_calls=attempt,
+                    provider_max_attempts=provider_max_attempts,
+                    validation_max_attempts=validation_max_attempts,
+                    provider_failures=provider_failures + 1,
+                    validation_failures=validation_failures,
+                    document_id=document_id,
+                    last_text=last_text,
+                    plan=plan,
+                )
+            last_error = str(exc)
+            last_error_kind = "provider"
+            provider_failures += 1
+            _log_synthetic_failure(
+                document_id=document_id,
+                model_id=model_id,
+                attempt=attempt,
+                call_budget=call_budget,
+                failure_kind="provider",
+                message=last_error,
+                plan=plan,
+            )
+            if provider_failures >= provider_max_attempts:
+                break
+            await wait_for_retry_async(exc, on_wait=on_wait)
+            continue
+        except ValueError as exc:
+            if on_call_elapsed is not None:
+                on_call_elapsed(attempt, time.perf_counter() - started, "error")
+            last_error, raw_text = _handle_provider_response_error(
+                exc,
+                document_id=document_id,
+                model_id=model_id,
+                attempt=attempt,
+                call_budget=call_budget,
+                plan=plan,
+            )
+            last_text = raw_text or last_text
+            last_error_kind = "provider"
+            provider_failures += 1
+            if provider_failures >= provider_max_attempts:
+                break
+            if on_status is not None:
+                on_status(f"retry: {last_error[:72]}")
+            continue
+        except Exception as exc:
+            if on_call_elapsed is not None:
+                on_call_elapsed(attempt, time.perf_counter() - started, "error")
+            msg, retryable, _ = describe_llm_api_error(exc, model_id=model_id)
+            if not retryable:
+                _log_synthetic_failure(
+                    document_id=document_id,
+                    model_id=model_id,
+                    attempt=attempt,
+                    call_budget=call_budget,
+                    failure_kind="provider",
+                    message=msg,
+                    plan=plan,
+                )
+                _raise_synthetic_llm_failed(
+                    model_id=model_id,
+                    reason="provider",
+                    last_error=msg,
+                    llm_calls=attempt,
+                    provider_max_attempts=provider_max_attempts,
+                    validation_max_attempts=validation_max_attempts,
+                    provider_failures=provider_failures + 1,
+                    validation_failures=validation_failures,
+                    document_id=document_id,
+                    last_text=last_text,
+                    plan=plan,
+                )
+            last_error = msg
+            last_error_kind = "provider"
+            provider_failures += 1
+            _log_synthetic_failure(
+                document_id=document_id,
+                model_id=model_id,
+                attempt=attempt,
+                call_budget=call_budget,
+                failure_kind="provider",
+                message=last_error,
+                plan=plan,
+            )
+            if provider_failures >= provider_max_attempts:
+                break
+            wrapped = LlmRequestError(
+                msg,
+                retryable=True,
+                model_id=model_id,
+                retry_after_seconds=retry_after_seconds_from_error(exc),
+            )
+            await wait_for_retry_async(wrapped, on_wait=on_wait)
+            continue
+
+        text = str(payload.get("text", "")).strip()
+        last_text = text
+        validation_error = _validate_llm_text_or_log(
+            text,
+            plan,
+            document_id=document_id,
+            model_id=model_id,
+            attempt=attempt,
+            call_budget=call_budget,
+        )
+        if validation_error is None:
+            return text
+        last_error = validation_error
+        last_error_kind = "validation"
+        validation_failures += 1
+        if validation_failures >= validation_max_attempts:
+            break
+        if on_status is not None:
+            on_status(f"retry: {last_error[:72]}")
+    hint = ""
+    if "rate limit" in last_error.lower() and provider_max_attempts < 3:
+        hint = (
+            " Tip: increase llm.provider_max_attempts "
+            "(or llm.max_attempts for legacy configs) for 429 retries."
+        )
+    _raise_synthetic_llm_failed(
+        model_id=model_id,
+        reason=last_error_kind,
+        last_error=last_error,
+        llm_calls=attempt,
+        provider_max_attempts=provider_max_attempts,
+        validation_max_attempts=validation_max_attempts,
+        provider_failures=provider_failures,
+        validation_failures=validation_failures,
+        hint=hint,
+        document_id=document_id,
+        last_text=last_text,
+        plan=plan,
     )
 
 
@@ -351,6 +879,9 @@ def config_summary_for_meta(config: SyntheticConfig) -> dict:
             "max_chars": config.text_length.max_chars,
         },
         "llm_model": config.llm.model,
+        "llm_parallelism": config.llm.parallelism,
+        "llm_provider_max_attempts": config.llm.provider_max_attempts,
+        "llm_validation_max_attempts": config.llm.validation_max_attempts,
     }
 
 

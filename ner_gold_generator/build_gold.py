@@ -10,6 +10,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import ner_gold_generator.manual_entities as arxiv_manual
@@ -338,12 +339,23 @@ def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
     settings = LlmGoldSettings()
     progress = Progress(quiet=args.quiet, verbose=args.verbose)
+    started = time.perf_counter()
 
     try:
-        return _run_build(args, settings=settings, progress=progress)
+        return _run_build(
+            args,
+            settings=settings,
+            progress=progress,
+            started_at=started,
+        )
     except BuildInterrupted as exc:
         progress.finish_bar()
-        return _handle_build_interrupted(exc, args=args, progress=progress)
+        return _handle_build_interrupted(
+            exc,
+            args=args,
+            progress=progress,
+            elapsed_seconds=time.perf_counter() - started,
+        )
     except KeyboardInterrupt:
         progress.finish_bar()
         print("interrupted: cancelled by user (Ctrl+C)", file=sys.stderr)
@@ -363,6 +375,7 @@ def _handle_build_interrupted(
     *,
     args: argparse.Namespace,
     progress: Progress,
+    elapsed_seconds: float | None = None,
 ) -> int:
     """Write partial JSONL when available and report how much completed."""
     if exc.examples:
@@ -377,6 +390,17 @@ def _handle_build_interrupted(
         progress.log(
             f"interrupted: cancelled after {exc.completed}/{exc.total} documents; output not written"
         )
+    if exc.examples and not getattr(args, "quiet", True):
+        source = getattr(args, "source", "arxiv")
+        mode_label = "synthetic" if source == "synthetic" else getattr(args, "mode", "manual")
+        for line in summarize_gold_build(
+            exc.examples,
+            source=source,
+            mode=mode_label,
+            elapsed_seconds=elapsed_seconds,
+            requested_documents=exc.total,
+        ):
+            progress.log(line)
     return INTERRUPT_EXIT_CODE
 
 
@@ -401,19 +425,23 @@ def _run_build(
     *,
     settings: LlmGoldSettings,
     progress: Progress,
+    started_at: float,
 ) -> int:
     progress.verbose_log("starting build")
+    skipped_documents: list[dict] = []
     if args.source == "synthetic":
         if args.synthetic_config is None:
             print("error: --source synthetic requires --synthetic-config", file=sys.stderr)
             return 2
         progress.verbose_log(f"loading synthetic config: {args.synthetic_config}")
-        examples = build_examples_from_config_path(
+        synthetic_result = build_examples_from_config_path(
             args.synthetic_config,
             settings=settings,
             mock=args.mock or settings.mock_llm,
             progress=progress,
         )
+        examples = synthetic_result.examples
+        skipped_documents = [s.to_dict() for s in synthetic_result.skipped]
     else:
         if args.mode == "manual" and args.source != "arxiv" and args.manual is None:
             print(
@@ -462,7 +490,24 @@ def _run_build(
     mode_label = "synthetic" if args.source == "synthetic" else args.mode
     print(f"Wrote {out} ({len(examples)} examples, source={args.source}, mode={mode_label})")
     if not args.quiet:
-        for line in summarize_gold_build(examples, source=args.source, mode=mode_label):
+        requested = None
+        if args.source == "synthetic" and args.synthetic_config is not None:
+            try:
+                from ner_gold_generator.synthetic_config import load_synthetic_config
+
+                requested = load_synthetic_config(args.synthetic_config).num_documents
+            except (OSError, ValueError):
+                requested = None
+        elif args.limit is not None:
+            requested = args.limit
+        for line in summarize_gold_build(
+            examples,
+            source=args.source,
+            mode=mode_label,
+            elapsed_seconds=time.perf_counter() - started_at,
+            requested_documents=requested,
+            skipped_documents=skipped_documents if args.source == "synthetic" else None,
+        ):
             print(line, file=sys.stderr)
     return 0
 

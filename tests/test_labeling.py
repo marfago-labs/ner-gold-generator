@@ -179,7 +179,13 @@ def test_build_chat_client_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
     assert isinstance(client, OpenRouterChatClient)
 
 
-def test_openrouter_client_complete_json(capsys) -> None:
+def test_openrouter_client_complete_json(capsys, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("NER_GOLD_LOG_STDERR", "1")
+    monkeypatch.setenv("NER_GOLD_LOG_FILE", "")
+    import ner_gold_generator.llm_client as llm_client_mod
+
+    llm_client_mod._LOGGER.handlers.clear()
+    llm_client_mod._LOGGER = llm_client_mod.get_logger(llm_client_mod.__name__)
     pytest.importorskip("openai")
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=MagicMock(content='{"entities": []}'))]

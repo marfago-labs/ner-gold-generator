@@ -40,6 +40,8 @@ class GeneratorConfig:
 class LlmSyntheticConfig:
     model: str = ""
     max_attempts: int = 3
+    provider_max_attempts: int = 3
+    validation_max_attempts: int = 3
     temperature: float = 0.4
     timeout_seconds: float = 120.0
     request_delay_seconds: float = 0.0
@@ -142,9 +144,14 @@ def _parse_generator(label: str, raw: dict[str, Any]) -> GeneratorConfig:
 
 
 def _parse_llm(raw: dict[str, Any]) -> LlmSyntheticConfig:
+    max_attempts = max(1, int(raw.get("max_attempts", 3)))
+    provider_attempts = int(raw.get("provider_max_attempts", max_attempts))
+    validation_attempts = int(raw.get("validation_max_attempts", max_attempts))
     return LlmSyntheticConfig(
         model=str(raw.get("model", "")).strip(),
-        max_attempts=int(raw.get("max_attempts", 3)),
+        max_attempts=max_attempts,
+        provider_max_attempts=max(1, provider_attempts),
+        validation_max_attempts=max(1, validation_attempts),
         temperature=float(raw.get("temperature", 0.4)),
         timeout_seconds=float(raw.get("timeout_seconds", 120.0)),
         request_delay_seconds=float(raw.get("request_delay_seconds", 0.0)),

@@ -1,4 +1,4 @@
-You generate short documents for NER benchmark gold data.
+You generate documents for NER benchmark gold data.
 
 Rules:
 - Follow the domain style and length limits given in the user message.

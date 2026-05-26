@@ -3,7 +3,7 @@
   "num_documents": 50,
   "engine": "llm",
   "domain": "scientific_abstract",
-  "text_length": { "min_chars": 200, "max_chars": 900 },
+  "text_length": { "min_chars": 1500, "max_chars": 2000 },
   "entities_per_document": { "distribution": "fixed", "fixed": 6 },
   "label_weights": {
     "model": 0.2,
@@ -18,6 +18,8 @@
   "llm": {
     "model": "openai/gpt-oss-120b:free",
     "max_attempts": 3,
+    "provider_max_attempts": 2,
+    "validation_max_attempts": 10,
     "temperature": 0.4,
     "timeout_seconds": 90,
     "request_delay_seconds": 2,

@@ -27,7 +27,8 @@ Flow:
 2. **Prompt** the LLM: system rules (JSON + verbatim constraints) and a per-document user message listing required spans (domain/length from config).
 3. **Validate** the response: each planned surface must appear **exactly once** (counted with a regex on `re.escape(surface)`).
 4. **Retry** up to `llm.max_attempts` if any surface is missing or duplicated.
-5. **Gold** offsets come from the plan, not from LLM-extracted NER.
+5. **Skip** the document if it still fails after all attempts; continue with the rest.
+6. **Gold** offsets come from the plan, not from LLM-extracted NER.
 
 Each output row includes `synthetic_meta.entity_usage` with `planned`, `used_exactly_once`, `missing`, `duplicate_in_text`, and per-surface `occurrence_counts`.
 
@@ -50,22 +51,26 @@ Use `--mock` only for CI/tests; it skips the API and uses template assembly even
 | `generators` | Per-label format options (`date.formats`, `currency.codes`, …) |
 | `templates` | Sentences with `{e0}`, `{e1}`, … placeholders |
 | `llm.model` | **Required** when `engine: llm` — OpenRouter model id (use a `:free` variant for zero cost) |
-| `llm.max_attempts` / `llm.temperature` | Retry and sampling for LLM engine |
+| `llm.max_attempts` | Legacy retry knob (fallback for both retry classes) |
+| `llm.provider_max_attempts` | Retries for provider/API failures (timeouts, 429, transient errors) |
+| `llm.validation_max_attempts` | Retries for non-compliant outputs (missing/duplicate planned surfaces, empty text) |
+| `llm.temperature` | Sampling temperature for LLM engine |
 | `llm.timeout_seconds` | Per-request HTTP timeout (default `120`; lower if a run seems stuck) |
 | `llm.request_delay_seconds` | Pause before retries (helps free-tier rate limits) |
 | `llm.parallelism` | Number of concurrent synthetic LLM document calls (default `3`; use `1` for sequential, no thread pool) |
 | `llm.prompt_file` | Path (relative to config file or absolute) to system prompt text file |
 | `llm.system_prompt` | Inline system prompt string (used when `prompt_file` is not set) |
 
-With live OpenRouter calls, each request now prints the full prompt and raw model response to **stderr** (`--- LLM prompt (...) ---`, `--- LLM response (...) ---`). This is emitted for every attempt, including retries.
+With live OpenRouter calls, each request logs the full prompt and raw model response to **`gold.log`** by default (`--- LLM prompt (...) ---`, `--- LLM response (...) ---`), including retries. Validation failures also log the **planned entities**, **error details**, and the **generated text** that failed (search for `synthetic failure` or `synthetic failure (final_` in `gold.log`). Set `NER_GOLD_LOG_STDERR=1` to mirror debug logs to stderr.
 
 **Stuck on `LLM 2/3`?** The bar only updates between steps. During `calling OpenRouter…` the client is waiting on the API (reasoning models can take minutes). Prefer instruct/chat `:free` models over `*:reasoning:free`, or use `engine: procedural` for offline runs.
 
 Concurrency safety notes:
 
-- `llm.parallelism = 1` runs sequentially (no `ThreadPoolExecutor`).
+- `llm.parallelism = 1` runs sequentially (no tasks created).
 - Progress updates and output row aggregation are done on the main thread only.
-- On interrupt or worker failure, pending futures are cancelled and the executor is shut down cleanly.
+- On interrupt, pending asyncio tasks are cancelled.
+- Per-document LLM failures after all retries are skipped; other documents still complete.
 
 Example: `configs/synthetic_smoke.json`.
 

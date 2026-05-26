@@ -42,12 +42,17 @@ uv pip install --force-reinstall jiter
 | `--quiet` | false | Suppress progress on stderr |
 | `--verbose` | false | Print detailed step-by-step logs on stderr |
 
-Progress goes to **stderr** as compact status lines (`3/10 (30%) synthetic-... generating (llm)…`). Synthetic LLM runs also show attempt `1/3` while waiting on OpenRouter. Use `--verbose` to print detailed step logs (`verbose: ...`) and `--quiet` to disable stderr progress/logging. The final `Wrote …` line goes to **stdout**; a short **statistics** block (document/entity counts, label histogram, synthetic entity-plan totals) is printed to **stderr** after a successful run.
+Progress goes to **stderr** via [Rich](https://github.com/Textualize/rich) on interactive terminals (stable bar + skip lines that do not overwrite each other). Non-TTY runs (pipes, tests) use plain ASCII lines. Synthetic LLM runs also show attempt `1/3` while waiting on OpenRouter. Use `--quiet` to disable stderr progress/logging. The final `Wrote …` line goes to **stdout**; a **statistics** block (counts, label histogram, synthetic entity-plan totals, elapsed time and throughput) is printed to **stderr** after a successful run (and after Ctrl+C when partial output was written).
 
-For live OpenRouter requests, each LLM call also prints full prompt/response blocks to **stderr** (including retries):
+For live OpenRouter requests, each LLM call is logged to `gold.log` by default (including retries), with structured fields (timestamp, level, logger, message):
 
 - `--- LLM prompt (model, temperature, attempt X/Y) ---`
 - `--- LLM response (model, attempt X/Y) ---`
+
+Logger controls (optional):
+
+- `NER_GOLD_LOG_FILE` (default: `gold.log`) — where structured debug logs are written.
+- `NER_GOLD_LOG_STDERR` (default: `0`) — set to `1` to mirror debug logs to stderr.
 
 ## Exit codes
 

@@ -10,6 +10,44 @@ def test_summarize_empty() -> None:
     assert lines == ["statistics: (no examples produced)"]
 
 
+def test_summarize_includes_skipped_documents() -> None:
+    examples = [{"text": "ok", "entities": []}]
+    skipped = [
+        {
+            "id": "synthetic-00000042-00003",
+            "document_index": 3,
+            "document_seed": 1,
+            "error": "Surface 'pre-training' appears 2 times (expected 1)",
+        }
+    ]
+    text = "\n".join(
+        summarize_gold_build(
+            examples,
+            source="synthetic",
+            mode="synthetic",
+            skipped_documents=skipped,
+        )
+    )
+    assert "skipped documents: 1" in text
+    assert "synthetic-00000042-00003" in text
+    assert "appears 2 times" in text
+
+
+def test_summarize_includes_elapsed_and_throughput() -> None:
+    examples = [{"text": "hi", "entities": []}]
+    lines = summarize_gold_build(
+        examples,
+        source="synthetic",
+        mode="synthetic",
+        elapsed_seconds=12.5,
+        requested_documents=5,
+    )
+    text = "\n".join(lines)
+    assert "elapsed: 12.5s" in text
+    assert "throughput: 12.5s per document" in text
+    assert "completed: 1/5 documents" in text
+
+
 def test_summarize_synthetic_rows() -> None:
     examples = [
         {

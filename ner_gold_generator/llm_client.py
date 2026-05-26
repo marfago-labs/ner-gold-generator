@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 import threading
 import time
 from collections.abc import Callable
 from typing import Any, NoReturn, Protocol
 
+from ner_gold_generator.logger import get_logger
+
 _STDERR_LOG_LOCK = threading.Lock()
+_LOGGER = get_logger(__name__)
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/models"
@@ -43,6 +45,18 @@ def verify_llm_installation() -> None:
         import openai  # noqa: F401
     except ImportError as exc:
         raise ImportError(f"LLM support requires openai. Run: {_LLM_INSTALL_HINT}") from exc
+
+
+class InvalidLlmResponseError(ValueError):
+    """Model returned a response that could not be parsed as expected JSON.
+
+    Attributes:
+        raw: Raw model text when available (for debug logs).
+    """
+
+    def __init__(self, message: str, *, raw: str = "") -> None:
+        super().__init__(message)
+        self.raw = raw
 
 
 class LlmRequestError(Exception):
@@ -231,6 +245,21 @@ class ChatClient(Protocol):
         ...
 
 
+class AsyncChatClient(Protocol):
+    """Async protocol for a single-turn JSON object response from a chat model."""
+
+    async def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        temperature: float,
+        call_label: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a parsed JSON object from the model (async)."""
+        ...
+
+
 def strip_json_fence(raw: str) -> str:
     """Remove optional Markdown ```json fences from model output.
 
@@ -294,13 +323,18 @@ def log_llm_prompt(
     header = f"--- LLM prompt ({model_id}, temperature={temperature}"
     if call_label:
         header += f", {call_label}"
+    payload = "\n".join(
+        (
+            f"{header}) ---",
+            "SYSTEM:",
+            system,
+            "USER:",
+            user,
+            "--- end LLM prompt ---",
+        )
+    )
     with _STDERR_LOG_LOCK:
-        print(f"{header}) ---", file=sys.stderr, flush=True)
-        print("SYSTEM:", file=sys.stderr, flush=True)
-        print(system, file=sys.stderr, flush=True)
-        print("USER:", file=sys.stderr, flush=True)
-        print(user, file=sys.stderr, flush=True)
-        print("--- end LLM prompt ---", file=sys.stderr, flush=True)
+        _LOGGER.debug(payload)
 
 
 def log_llm_response(
@@ -313,10 +347,15 @@ def log_llm_response(
     header = f"--- LLM response ({model_id}"
     if call_label:
         header += f", {call_label}"
+    payload = "\n".join(
+        (
+            f"{header}) ---",
+            raw if raw.strip() else "(empty)",
+            "--- end LLM response ---",
+        )
+    )
     with _STDERR_LOG_LOCK:
-        print(f"{header}) ---", file=sys.stderr, flush=True)
-        print(raw if raw.strip() else "(empty)", file=sys.stderr, flush=True)
-        print("--- end LLM response ---", file=sys.stderr, flush=True)
+        _LOGGER.debug(payload)
 
 
 class OpenRouterChatClient:
@@ -378,19 +417,116 @@ class OpenRouterChatClient:
             )
             choices = response.choices
             if not choices:
-                raise ValueError(
+                raise InvalidLlmResponseError(
                     f"Model {self._model_id!r} returned no choices "
-                    "(empty or malformed OpenRouter response)"
+                    "(empty or malformed OpenRouter response)",
+                    raw="",
                 )
             raw = choices[0].message.content or ""
             log_llm_response(model_id=self._model_id, raw=raw, call_label=call_label)
             return json.loads(strip_json_fence(raw))
         except json.JSONDecodeError as exc:
-            raise ValueError(f"Model {self._model_id!r} returned invalid JSON: {exc}") from exc
+            raise InvalidLlmResponseError(
+                f"Model {self._model_id!r} returned invalid JSON: {exc}",
+                raw=raw,
+            ) from exc
+        except InvalidLlmResponseError:
+            raise
         except Exception as exc:
-            if isinstance(exc, ValueError) and "returned no choices" in str(exc):
-                raise
             raise_llm_request_error(exc, model_id=self._model_id)
+
+
+class AsyncOpenRouterChatClient:
+    """Async live LLM calls via OpenRouter (OpenAI-compatible API).
+
+    Uses the OpenAI SDK async client (``AsyncOpenAI``) against the OpenRouter
+    base URL.
+    """
+
+    def __init__(
+        self,
+        *,
+        api_key: str,
+        model_id: str,
+        base_url: str = _OPENROUTER_BASE,
+        timeout_seconds: float = 120.0,
+    ) -> None:
+        verify_llm_installation()
+        from openai import AsyncOpenAI
+
+        self._model_id = model_id
+        # max_retries=0: callers handle retry/backoff.
+        self._client = AsyncOpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            max_retries=0,
+            timeout=timeout_seconds,
+        )
+
+    async def complete_json(
+        self,
+        *,
+        system: str,
+        user: str,
+        temperature: float,
+        call_label: str | None = None,
+    ) -> dict[str, Any]:
+        """Request a JSON object response from OpenRouter (async)."""
+        log_llm_prompt(
+            model_id=self._model_id,
+            system=system,
+            user=user,
+            temperature=temperature,
+            call_label=call_label,
+        )
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model_id,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                response_format={"type": "json_object"},
+            )
+            choices = response.choices
+            if not choices:
+                raise InvalidLlmResponseError(
+                    f"Model {self._model_id!r} returned no choices "
+                    "(empty or malformed OpenRouter response)",
+                    raw="",
+                )
+            raw = choices[0].message.content or ""
+            log_llm_response(model_id=self._model_id, raw=raw, call_label=call_label)
+            return json.loads(strip_json_fence(raw))
+        except json.JSONDecodeError as exc:
+            raise InvalidLlmResponseError(
+                f"Model {self._model_id!r} returned invalid JSON: {exc}",
+                raw=raw,
+            ) from exc
+        except InvalidLlmResponseError:
+            raise
+        except Exception as exc:
+            raise_llm_request_error(exc, model_id=self._model_id)
+
+
+def build_async_chat_client(
+    settings: object,
+    *,
+    model_id: str,
+    timeout_seconds: float = 120.0,
+) -> AsyncChatClient:
+    """Build an async OpenRouter client from settings.
+
+    Kept as a small wrapper to make asyncio-based callers easy to test by
+    monkeypatching this factory.
+    """
+    api_key = getattr(settings, "openrouter_api_key", "")
+    return AsyncOpenRouterChatClient(
+        api_key=str(api_key),
+        model_id=model_id,
+        timeout_seconds=timeout_seconds,
+    )
 
 
 class MockChatClient:
