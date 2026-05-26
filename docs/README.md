@@ -8,6 +8,7 @@ Build **NER benchmark gold datasets** (JSONL with character offsets) from arXiv 
 |----------|----------|
 | [Getting started](getting-started.md) | Install, first run, monorepo layout |
 | [Input sources](input-sources.md) | `arxiv`, `youtube`, `folder`, `jsonl` formats and defaults |
+| [Synthetic generation](synthetic.md) | Config-driven synthetic gold (`--source synthetic`) |
 | [Labeling modes](labeling-modes.md) | Manual curation vs multi-sample LLM consensus |
 | [Gold schema](gold-schema.md) | JSONL fields, allowed labels, extra metadata |
 | [CLI reference](cli.md) | `build-gold`, `build-arxiv-gold`, flags, exit codes |

@@ -83,7 +83,7 @@ uv run build-gold --source folder --input ./docs --mode llm --mock --limit 2
 
 ### Model and prompt
 
-- Model: `LLM_GOLD_MODEL` (default `openai/gpt-4o-mini`) via OpenRouter
+- Model: `LLM_GOLD_MODEL` in `.env` (required for live LLM; no default in code) via OpenRouter
 - Allowed labels: see [Gold schema](gold-schema.md)
 - Response must be JSON: `{"entities": [{"text": "...", "label": "..."}]}`
 
@@ -98,7 +98,7 @@ Extra fields on each JSONL row (ignored by ner-detector):
     "samples": 3,
     "min_votes": 2,
     "per_run_counts": [4, 5, 4],
-    "model": "openai/gpt-4o-mini"
+    "model": "meta-llama/llama-3.3-70b-instruct:free"
   }
 }
 ```

@@ -48,9 +48,10 @@ Invariant: `text[start:end] == entity.text` for every entity.
 
 | Field | When present |
 |-------|----------------|
-| `source` | Corpus type: `arxiv`, `youtube`, `folder`, `jsonl` |
-| `gold_source` | `llm` when produced by LLM mode |
+| `source` | Corpus type: `arxiv`, `youtube`, `folder`, `jsonl`, `synthetic` |
+| `gold_source` | `llm` or `synthetic` when not manual |
 | `llm_meta` | LLM run statistics (samples, votes, model id) |
+| `synthetic_meta` | Seed, engine, document index (synthetic mode) |
 
 ## Allowed labels
 
@@ -66,7 +67,10 @@ Used in manual files and LLM prompts; normalized to lowercase with underscores.
 | `benchmark` | Benchmarks / tasks (WMT 2014, SQuAD, …) |
 | `metric` | Metrics (BLEU, F1, accuracy phrases) |
 | `method` | Methods, training procedures |
-| `number` | Numeric results (28.4, 3.57%, …) |
+| `number` | Numeric results (28.4, …) |
+| `percentage` | Percentages (12.5%, …) |
+| `currency` | Money amounts ($1.2M, 50 EUR, …) |
+| `date` | Calendar dates in varied formats |
 | `year` | Years |
 | `arxiv_id` | arXiv identifiers in text |
 | `acronym` | Acronyms |

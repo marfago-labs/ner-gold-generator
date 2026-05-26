@@ -17,7 +17,7 @@ ner_gold_generator/
   validate.py        Label allow-list + substring anchoring
   mock.py            Deterministic mock entities for tests
   types.py           ProposedEntity, ValidatedEntity
-  progress.py        stderr progress bars
+  progress.py        stderr progress status lines
   env.py             Load .env once per process
 ```
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from pydantic import Field
@@ -14,6 +15,7 @@ from ner_gold_generator.llm_client import (
     ChatClient,
     MockChatClient,
     OpenRouterChatClient,
+    verify_llm_installation,
 )
 from ner_gold_generator.mock import mock_extract_entities
 from ner_gold_generator.types import ProposedEntity, ValidatedEntity
@@ -33,6 +35,9 @@ _DEFAULT_LABELS = (
     "arxiv_id",
     "acronym",
     "miscellaneous",
+    "date",
+    "currency",
+    "percentage",
 )
 
 _SYSTEM_PROMPT = """You annotate named entities in scientific text for NER evaluation gold data.
@@ -58,7 +63,7 @@ class LlmGoldSettings(BaseSettings):
     """
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=str(Path(__file__).resolve().parent.parent / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -69,7 +74,7 @@ class LlmGoldSettings(BaseSettings):
         alias="OPENROUTER_BASE_URL",
     )
     llm_gold_model: str = Field(
-        default="openai/gpt-4o-mini",
+        default="",
         alias="LLM_GOLD_MODEL",
     )
     llm_gold_samples: int = Field(default=3, alias="LLM_GOLD_SAMPLES")
@@ -111,11 +116,32 @@ def default_min_votes(num_samples: int, configured: int) -> int:
     return (num_samples // 2) + 1
 
 
+def resolve_openrouter_model_id(
+    settings: LlmGoldSettings,
+    *,
+    override: str | None = None,
+) -> str:
+    """Return the OpenRouter model id from *override* or ``LLM_GOLD_MODEL``.
+
+    Raises:
+        ValueError: If no non-empty model id is configured.
+    """
+    model_id = (override if override is not None else settings.llm_gold_model).strip()
+    if not model_id:
+        raise ValueError(
+            "LLM model id is required: set llm.model in the synthetic config "
+            "or LLM_GOLD_MODEL in the environment"
+        )
+    return model_id
+
+
 def build_chat_client(
     settings: LlmGoldSettings,
     *,
     mock: bool = False,
     mock_client: ChatClient | None = None,
+    model_id: str | None = None,
+    timeout_seconds: float | None = None,
 ) -> ChatClient:
     """Construct a chat client for labeling.
 
@@ -123,6 +149,8 @@ def build_chat_client(
         settings: API key, model, and mock flags.
         mock: Force mock client even if an API key is set.
         mock_client: Inject a custom client (tests).
+        model_id: OpenRouter model slug; overrides ``LLM_GOLD_MODEL`` when set.
+        timeout_seconds: HTTP timeout for live OpenRouter calls (default 120s).
 
     Returns:
         *mock_client*, :class:`~llm_client.MockChatClient`, or
@@ -132,10 +160,19 @@ def build_chat_client(
         return mock_client
     if mock or settings.mock_llm or not settings.openrouter_api_key.strip():
         return MockChatClient()
+    verify_llm_installation()
+    client_kwargs: dict[str, str | float] = {
+        "api_key": settings.openrouter_api_key.strip(),
+        "model_id": resolve_openrouter_model_id(settings, override=model_id),
+        "base_url": settings.openrouter_base_url,
+    }
+    if timeout_seconds is not None:
+        client_kwargs["timeout_seconds"] = timeout_seconds
     return OpenRouterChatClient(
-        api_key=settings.openrouter_api_key.strip(),
-        model_id=settings.llm_gold_model,
-        base_url=settings.openrouter_base_url,
+        api_key=str(client_kwargs["api_key"]),
+        model_id=str(client_kwargs["model_id"]),
+        base_url=str(client_kwargs["base_url"]),
+        timeout_seconds=float(client_kwargs.get("timeout_seconds", 120.0)),
     )
 
 
@@ -175,6 +212,7 @@ def extract_entities_once(
     *,
     labels: tuple[str, ...] = _DEFAULT_LABELS,
     temperature: float = 0.4,
+    call_label: str | None = None,
 ) -> list[ProposedEntity]:
     """Run a single LLM annotation pass on *text*.
 
@@ -183,13 +221,19 @@ def extract_entities_once(
         text: Document body to annotate.
         labels: Allowed label names for the prompt.
         temperature: Sampling temperature for this pass.
+        call_label: Optional tag printed with live prompts (e.g. consensus pass).
 
     Returns:
         Proposed entities with normalized labels (not yet anchored).
     """
     system = _SYSTEM_PROMPT.format(labels=", ".join(labels))
     user = _user_prompt(text, labels=labels)
-    payload = client.complete_json(system=system, user=user, temperature=temperature)
+    payload = client.complete_json(
+        system=system,
+        user=user,
+        temperature=temperature,
+        call_label=call_label,
+    )
     return _parse_run(payload)
 
 
@@ -245,6 +289,7 @@ def label_text_with_llm_consensus(
                 text,
                 labels=labels,
                 temperature=temp,
+                call_label=f"sample {sample_idx + 1}/{n}",
             )
         )
 

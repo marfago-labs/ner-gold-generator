@@ -11,12 +11,75 @@ import ner_gold_generator.build_arxiv as build_arxiv_mod
 import ner_gold_generator.build_gold as build_gold_mod
 import ner_gold_generator.manual_entities as manual_mod
 from ner_gold_generator import env as env_module
-from ner_gold_generator.progress import Progress
+from ner_gold_generator.build_gold import _cli_error_message
+from ner_gold_generator.progress import Progress, _fit_status_line, short_model_label
 
 
-def test_progress_bar_format() -> None:
-    assert Progress.bar(0, 10) == "[----------------------------] 0/10"
-    assert Progress.bar(10, 10).endswith("10/10")
+def test_cli_error_message_errno2_hint() -> None:
+    msg = _cli_error_message(FileNotFoundError(2, "No such file or directory"))
+    assert "jiter" in msg
+    assert "uv sync" in msg
+
+
+def test_short_model_label() -> None:
+    assert (
+        short_model_label("nvidia/nemotron-3-nano-30b-a3b:free") == "nemotron-3-nano-30b-a3b:free"
+    )
+    long_id = "meta-llama/llama-3.3-70b-instruct:free-extra-suffix"
+    assert len(short_model_label(long_id, max_len=20)) <= 20
+
+
+def test_fit_status_line_shows_ends() -> None:
+    prefix = Progress.status_prefix(0, 5)
+    detail = "synthetic-00000042-00000 LLM 1/3 nvidia/nemotron-3-nano-30b-a3b:free"
+    line = _fit_status_line(prefix, detail, 80)
+    assert "synthetic" in line
+    assert ":free" in line
+
+
+def test_progress_status_prefix_format() -> None:
+    assert Progress.status_prefix(0, 10) == "0/10 (0%)"
+    assert Progress.status_prefix(10, 10) == "10/10 (100%)"
+
+
+def test_progress_track_updates_bar(capsys) -> None:
+    prog = Progress(quiet=False)
+    prog._tty_bar = False  # deterministic line-based output in tests
+    with prog.track(2, label="test") as tick:
+        tick(1, detail="first")
+        tick(2, detail="second")
+    err = capsys.readouterr().err
+    assert "test: 2 total" in err
+    assert "(50%)" in err
+    assert "first" in err
+    assert "second" in err
+
+
+def test_progress_update_bar_skips_when_quiet(capsys) -> None:
+    Progress(quiet=True).update_bar(1, 2, detail="hidden")
+    assert capsys.readouterr().err == ""
+
+
+def test_progress_status_prefix_zero_total() -> None:
+    assert Progress.status_prefix(0, 0) == "0/0 (0%)"
+
+
+def test_fit_status_line_truncates_long_detail() -> None:
+    prefix = "1/5 (20%)"
+    detail = "x" * 200
+    line = _fit_status_line(prefix, detail, 40)
+    assert line.startswith(prefix)
+    assert "…" in line
+    assert len(line) <= 40
+
+
+def test_progress_update_bar_prints_line(capsys) -> None:
+    prog = Progress(quiet=False)
+    prog.update_bar(1, 2, detail="working")
+    err = capsys.readouterr().err
+    assert "1/2 (50%)" in err
+    assert "working" in err
+    assert "[" not in err
 
 
 def test_build_arxiv_gold_llm_mock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -151,6 +214,28 @@ def test_load_project_env_reads_file(tmp_path: Path) -> None:
     env_module._ENV_LOADED = False
 
 
+def test_main_prints_statistics_on_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.json"
+    out = tmp_path / "gold.jsonl"
+    code = build_gold_mod.main(
+        [
+            "--source",
+            "synthetic",
+            "--synthetic-config",
+            str(smoke),
+            "--output",
+            str(out),
+        ]
+    )
+    assert code == 0
+    captured = capsys.readouterr()
+    assert "statistics:" in captured.err
+    assert "documents:" in captured.err
+    assert "entity plan:" in captured.err
+
+
 def test_main_manual_writes_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     arxiv_dir = tmp_path / "arxiv"
     arxiv_dir.mkdir()
@@ -217,6 +302,16 @@ def test_progress_log(capsys) -> None:
     assert "status" in capsys.readouterr().err
 
 
+def test_progress_verbose_log(capsys) -> None:
+    Progress(quiet=False, verbose=True).verbose_log("loading docs")
+    assert "verbose: loading docs" in capsys.readouterr().err
+
+
+def test_progress_verbose_log_disabled(capsys) -> None:
+    Progress(quiet=False, verbose=False).verbose_log("hidden")
+    assert "hidden" not in capsys.readouterr().err
+
+
 def test_load_project_env_without_dotenv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import builtins
 
@@ -270,3 +365,24 @@ def test_build_llm_empty_docs() -> None:
             min_votes=1,
             mock=True,
         )
+
+
+def test_main_verbose_prints_step_logs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.json"
+    out = tmp_path / "gold.jsonl"
+    code = build_gold_mod.main(
+        [
+            "--source",
+            "synthetic",
+            "--synthetic-config",
+            str(smoke),
+            "--output",
+            str(out),
+            "--verbose",
+        ]
+    )
+    assert code == 0
+    err = capsys.readouterr().err
+    assert "verbose: starting build" in err
+    assert "verbose: loading synthetic config" in err
+    assert "verbose:" in err

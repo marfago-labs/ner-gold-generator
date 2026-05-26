@@ -11,11 +11,24 @@
 uv run build-gold --help
 ```
 
+For **LLM** modes (`--mode llm` or `synthetic` with `"engine": "llm"`), install optional dependencies first:
+
+```bash
+uv sync --extra llm
+```
+
+If live OpenRouter calls fail with `[Errno 2] No such file or directory` or `cannot import name 'from_json' from 'jiter'`, reinstall the native helper:
+
+```bash
+uv pip install --force-reinstall jiter
+```
+
 ## `build-gold` flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--source` | `arxiv` | `arxiv`, `youtube`, `folder`, `jsonl` |
+| `--source` | `arxiv` | `arxiv`, `youtube`, `folder`, `jsonl`, `synthetic` |
+| `--synthetic-config` | — | YAML/JSON spec (required for `synthetic`; see [synthetic.md](synthetic.md)) |
 | `--input` | *(source default)* | Input directory or JSONL file path |
 | `--output` | `../ner-detector/benchmark/datasets/arxiv_gold.jsonl` | Output JSONL path |
 | `--mode` | `manual` | `manual` or `llm` |
@@ -27,8 +40,14 @@ uv run build-gold --help
 | `--mock` | false | Use deterministic mock LLM (no API) |
 | `--limit` | — | Process only first N documents |
 | `--quiet` | false | Suppress progress on stderr |
+| `--verbose` | false | Print detailed step-by-step logs on stderr |
 
-Progress and per-document status go to **stderr**; the final `Wrote …` line goes to **stdout**.
+Progress goes to **stderr** as compact status lines (`3/10 (30%) synthetic-... generating (llm)…`). Synthetic LLM runs also show attempt `1/3` while waiting on OpenRouter. Use `--verbose` to print detailed step logs (`verbose: ...`) and `--quiet` to disable stderr progress/logging. The final `Wrote …` line goes to **stdout**; a short **statistics** block (document/entity counts, label histogram, synthetic entity-plan totals) is printed to **stderr** after a successful run.
+
+For live OpenRouter requests, each LLM call also prints full prompt/response blocks to **stderr** (including retries):
+
+- `--- LLM prompt (model, temperature, attempt X/Y) ---`
+- `--- LLM response (model, attempt X/Y) ---`
 
 ## Exit codes
 
@@ -36,7 +55,11 @@ Progress and per-document status go to **stderr**; the final `Wrote …` line go
 |------|---------|
 | `0` | Success |
 | `2` | Usage error (e.g. manual mode without `--manual` on non-arxiv) |
-| Non-zero | Uncaught exception (missing input, invalid span, API error, …) |
+| `1` | Runtime error (missing API key, unknown model, validation failure, …) |
+| `130` | Cancelled by user (Ctrl+C); partial JSONL is written when at least one document finished |
+| Non-zero | Other uncaught exceptions |
+
+Press **Ctrl+C** during a build to stop gracefully: in-flight synthetic LLM tasks are cancelled, completed rows are written to `--output` in document order, and the process exits with code `130`.
 
 ## Common recipes
 
@@ -60,6 +83,11 @@ uv run build-gold --source folder --input ./content --glob "*.md" \
 # Import JSONL corpus + LLM
 uv run build-gold --source jsonl --input corpus.jsonl --mode llm \
   --output output/corpus_gold.jsonl
+
+# Synthetic procedural gold (no corpus, no API)
+uv run build-gold --source synthetic \
+  --synthetic-config configs/synthetic_smoke.json \
+  --output output/synthetic_gold.jsonl
 ```
 
 ## Python API

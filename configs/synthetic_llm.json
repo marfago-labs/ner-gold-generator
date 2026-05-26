@@ -1,0 +1,27 @@
+{
+  "seed": 42,
+  "num_documents": 50,
+  "engine": "llm",
+  "domain": "scientific_abstract",
+  "text_length": { "min_chars": 200, "max_chars": 900 },
+  "entities_per_document": { "distribution": "fixed", "fixed": 6 },
+  "label_weights": {
+    "model": 0.2,
+    "dataset": 0.15,
+    "metric": 0.15,
+    "organization": 0.1,
+    "date": 0.1,
+    "number": 0.1,
+    "year": 0.1,
+    "method": 0.1
+  },
+  "llm": {
+    "model": "openai/gpt-oss-120b:free",
+    "max_attempts": 3,
+    "temperature": 0.4,
+    "timeout_seconds": 90,
+    "request_delay_seconds": 2,
+    "parallelism": 50,
+    "prompt_file": "synthetic_llm_system_prompt.txt"
+  }
+}

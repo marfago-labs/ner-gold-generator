@@ -14,6 +14,7 @@ from ner_gold_generator.labeling import (
     default_min_votes,
     extract_entities_once,
     label_text_with_llm_consensus,
+    resolve_openrouter_model_id,
 )
 from ner_gold_generator.llm_client import (
     MockChatClient,
@@ -163,20 +164,22 @@ def test_validate_duplicate_span_label() -> None:
     assert len(validate_proposed_entities(text, proposed)) == 1
 
 
+def test_resolve_openrouter_model_id_requires_value() -> None:
+    with pytest.raises(ValueError, match="LLM model id is required"):
+        resolve_openrouter_model_id(LlmGoldSettings())
+
+
 def test_build_chat_client_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
     # Env vars override LlmGoldSettings() fields; CI may set empty OPENROUTER_API_KEY.
     monkeypatch.setenv("OPENROUTER_API_KEY", "secret")
+    monkeypatch.setenv("LLM_GOLD_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
     monkeypatch.setenv("MOCK_LLM", "false")
-    settings = LlmGoldSettings(
-        openrouter_api_key="secret",
-        llm_gold_model="openai/gpt-4o-mini",
-        mock_llm=False,
-    )
+    settings = LlmGoldSettings()
     client = build_chat_client(settings)
     assert isinstance(client, OpenRouterChatClient)
 
 
-def test_openrouter_client_complete_json() -> None:
+def test_openrouter_client_complete_json(capsys) -> None:
     pytest.importorskip("openai")
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=MagicMock(content='{"entities": []}'))]
@@ -184,8 +187,20 @@ def test_openrouter_client_complete_json() -> None:
     mock_client.chat.completions.create.return_value = mock_response
     with patch("openai.OpenAI", return_value=mock_client):
         client = OpenRouterChatClient(api_key="k", model_id="m")
-        out = client.complete_json(system="s", user="u", temperature=0.1)
+        out = client.complete_json(
+            system="s",
+            user="u",
+            temperature=0.1,
+            call_label="attempt 2/3",
+        )
     assert out == {"entities": []}
+    err = capsys.readouterr().err
+    assert "--- LLM prompt (m, temperature=0.1, attempt 2/3) ---" in err
+    assert "SYSTEM:\ns\nUSER:\nu\n" in err
+    assert "--- end LLM prompt ---" in err
+    assert "--- LLM response (m, attempt 2/3) ---" in err
+    assert '{"entities": []}' in err
+    assert "--- end LLM response ---" in err
 
 
 def test_mock_chat_client_custom_responses() -> None:

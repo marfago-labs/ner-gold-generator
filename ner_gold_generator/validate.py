@@ -19,6 +19,9 @@ _ALLOWED_LABELS = frozenset(
         "arxiv_id",
         "acronym",
         "miscellaneous",
+        "date",
+        "currency",
+        "percentage",
     }
 )
 

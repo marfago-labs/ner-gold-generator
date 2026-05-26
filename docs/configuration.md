@@ -10,7 +10,7 @@ Copy `.env.example` to `.env` and edit locally. Do not commit secrets — CI and
 |----------|---------|-------------|
 | `OPENROUTER_API_KEY` | *(empty)* | API key; required for live LLM mode |
 | `OPENROUTER_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible base URL |
-| `LLM_GOLD_MODEL` | `openai/gpt-4o-mini` | Model id sent to OpenRouter |
+| `LLM_GOLD_MODEL` | *(empty)* | OpenRouter model id for `build-gold --mode llm` (required for live LLM) |
 | `LLM_GOLD_SAMPLES` | `3` | LLM passes per document |
 | `LLM_GOLD_MIN_VOTES` | `0` | Min agreeing passes (`0` = auto majority: ⌊N/2⌋+1) |
 | `LLM_GOLD_TEMPERATURE` | `0.4` | Sampling temperature per pass |
@@ -47,7 +47,7 @@ Only when using `build-gold` without `--output`. `build-arxiv-gold` always appli
 
 ```bash
 OPENROUTER_API_KEY=sk-or-...
-LLM_GOLD_MODEL=openai/gpt-4o-mini
+LLM_GOLD_MODEL=meta-llama/llama-3.3-70b-instruct:free
 LLM_GOLD_SAMPLES=5
 LLM_GOLD_MIN_VOTES=3
 LLM_GOLD_TEMPERATURE=0.3

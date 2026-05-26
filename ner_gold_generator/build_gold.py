@@ -13,16 +13,20 @@ import sys
 from pathlib import Path
 
 import ner_gold_generator.manual_entities as arxiv_manual
+from ner_gold_generator.build_stats import summarize_gold_build
 from ner_gold_generator.env import load_project_env
+from ner_gold_generator.interrupt import INTERRUPT_EXIT_CODE, BuildInterrupted
 from ner_gold_generator.labeling import (
     LlmGoldSettings,
     default_min_votes,
     entities_to_gold_dict,
     label_text_with_llm_consensus,
 )
+from ner_gold_generator.llm_client import LlmRequestError
 from ner_gold_generator.manual import load_manual_annotations, resolve_manual_spans
 from ner_gold_generator.progress import Progress
 from ner_gold_generator.sources import SourceDocument, default_input_dir, load_documents
+from ner_gold_generator.synthetic import build_examples_from_config_path
 from ner_gold_generator.validate import index_unique_span
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -85,23 +89,30 @@ def build_examples_manual(
     prog.log(f"build_gold: mode=manual source={source} documents={total}")
 
     examples: list[dict] = []
-    for idx, doc in enumerate(docs, start=1):
-        spans = resolve_manual_spans(doc.doc_id, source=source, file_annotations=file_ann)
-        if spans is None:
-            prog.log(f"{Progress.bar(idx, total)} {doc.doc_id}  skipped (no manual spans)")
-            continue
-        entities = []
-        for surface, label in spans:
-            start, end = _index_entity(doc.text, surface)
-            entities.append({"text": surface, "label": label, "start": start, "end": end})
-        row: dict = {
-            "id": doc.doc_id,
-            "text": doc.text,
-            "entities": entities,
-            "source": doc.source,
-        }
-        examples.append(row)
-        prog.log(f"{Progress.bar(idx, total)} {doc.doc_id}  {len(entities)} entities (manual)")
+    done = 0
+    try:
+        with prog.track(total, label=f"manual ({source})") as tick:
+            for doc in docs:
+                spans = resolve_manual_spans(doc.doc_id, source=source, file_annotations=file_ann)
+                if spans is None:
+                    done += 1
+                    tick(done, f"{doc.doc_id} skipped (no manual spans)")
+                    continue
+                entities = []
+                for surface, label in spans:
+                    start, end = _index_entity(doc.text, surface)
+                    entities.append({"text": surface, "label": label, "start": start, "end": end})
+                row: dict = {
+                    "id": doc.doc_id,
+                    "text": doc.text,
+                    "entities": entities,
+                    "source": doc.source,
+                }
+                examples.append(row)
+                done += 1
+                tick(done, f"{doc.doc_id} {len(entities)} entities (manual)")
+    except KeyboardInterrupt as exc:
+        raise BuildInterrupted(examples, completed=len(examples), total=total) from exc
     if not examples:
         raise ValueError(
             "No examples produced in manual mode; add --manual or use source=arxiv "
@@ -154,36 +165,49 @@ def build_examples_llm(
     )
 
     examples: list[dict] = []
-    for idx, doc in enumerate(docs, start=1):
-        prefix = f"{Progress.bar(idx, total)} {doc.doc_id}"
+    try:
+        with prog.track(total, label=f"llm ({source})") as tick:
+            for idx, doc in enumerate(docs, start=1):
+                tick(idx - 1, f"{doc.doc_id} labeling…")
 
-        def on_sample(sample_idx: int, sample_total: int, *, pfx: str = prefix) -> None:
-            prog.log(f"{pfx}  LLM pass {Progress.bar(sample_idx, sample_total)}")
+                def on_sample(
+                    sample_idx: int,
+                    sample_total: int,
+                    *,
+                    doc_id: str = doc.doc_id,
+                    done: int = idx - 1,
+                ) -> None:
+                    tick(done, f"{doc_id} LLM pass {sample_idx}/{sample_total}")
 
-        result = label_text_with_llm_consensus(
-            doc.text,
-            settings=settings,
-            num_samples=num_samples,
-            min_votes=min_votes,
-            mock=mock,
-            on_sample=on_sample,
-        )
-        examples.append(
-            {
-                "id": doc.doc_id,
-                "text": doc.text,
-                "entities": entities_to_gold_dict(result.entities),
-                "source": doc.source,
-                "gold_source": "llm",
-                "llm_meta": {
-                    "samples": result.sample_runs,
-                    "min_votes": result.min_votes,
-                    "per_run_counts": result.raw_run_counts,
-                    "model": settings.llm_gold_model,
-                },
-            }
-        )
-        prog.log(f"{prefix}  done: {len(result.entities)} entities (runs={result.raw_run_counts})")
+                result = label_text_with_llm_consensus(
+                    doc.text,
+                    settings=settings,
+                    num_samples=num_samples,
+                    min_votes=min_votes,
+                    mock=mock,
+                    on_sample=on_sample,
+                )
+                examples.append(
+                    {
+                        "id": doc.doc_id,
+                        "text": doc.text,
+                        "entities": entities_to_gold_dict(result.entities),
+                        "source": doc.source,
+                        "gold_source": "llm",
+                        "llm_meta": {
+                            "samples": result.sample_runs,
+                            "min_votes": result.min_votes,
+                            "per_run_counts": result.raw_run_counts,
+                            "model": settings.llm_gold_model,
+                        },
+                    }
+                )
+                tick(
+                    idx,
+                    f"{doc.doc_id} {len(result.entities)} entities (runs={result.raw_run_counts})",
+                )
+    except KeyboardInterrupt as exc:
+        raise BuildInterrupted(examples, completed=len(examples), total=total) from exc
     return examples
 
 
@@ -218,9 +242,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--source",
-        choices=("arxiv", "youtube", "folder", "jsonl"),
+        choices=("arxiv", "youtube", "folder", "jsonl", "synthetic"),
         default="arxiv",
-        help="Input corpus type (default: arxiv)",
+        help="Input corpus type (default: arxiv); synthetic generates from --synthetic-config",
+    )
+    parser.add_argument(
+        "--synthetic-config",
+        type=Path,
+        default=None,
+        help="YAML/JSON config for --source synthetic (required for synthetic)",
     )
     parser.add_argument(
         "--input",
@@ -284,6 +314,11 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         action="store_true",
         help="Suppress progress on stderr",
     )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Show detailed step logs on stderr",
+    )
     return parser.parse_args(argv)
 
 
@@ -302,48 +337,133 @@ def main(argv: list[str] | None = None) -> int:
     load_project_env()
     args = _parse_args(argv)
     settings = LlmGoldSettings()
-    progress = Progress(quiet=args.quiet)
+    progress = Progress(quiet=args.quiet, verbose=args.verbose)
 
-    if args.mode == "manual" and args.source != "arxiv" and args.manual is None:
-        print(
-            "error: manual mode for non-arxiv sources requires --manual annotations file",
-            file=sys.stderr,
-        )
-        return 2
+    try:
+        return _run_build(args, settings=settings, progress=progress)
+    except BuildInterrupted as exc:
+        progress.finish_bar()
+        return _handle_build_interrupted(exc, args=args, progress=progress)
+    except KeyboardInterrupt:
+        progress.finish_bar()
+        print("interrupted: cancelled by user (Ctrl+C)", file=sys.stderr)
+        return INTERRUPT_EXIT_CODE
+    except (ValueError, LlmRequestError, ImportError) as exc:
+        progress.finish_bar()
+        print(f"error: {_cli_error_message(exc)}", file=sys.stderr)
+        return 1
+    except (FileNotFoundError, OSError) as exc:
+        progress.finish_bar()
+        print(f"error: {_cli_error_message(exc)}", file=sys.stderr)
+        return 1
 
-    input_path = resolve_input_path(args.source, args.input)
-    docs = load_documents(
-        args.source,
-        input_path,
-        limit=args.limit,
-        text_field=args.text_field,
-        glob_pattern=args.glob,
-    )
 
-    if args.mode == "manual":
-        examples = build_examples_manual(
-            docs,
-            source=args.source,
-            manual_path=args.manual,
-            progress=progress,
+def _handle_build_interrupted(
+    exc: BuildInterrupted,
+    *,
+    args: argparse.Namespace,
+    progress: Progress,
+) -> int:
+    """Write partial JSONL when available and report how much completed."""
+    if exc.examples:
+        out = args.output
+        out.parent.mkdir(parents=True, exist_ok=True)
+        lines = [json.dumps(ex, ensure_ascii=False) for ex in exc.examples]
+        out.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        progress.log(
+            f"interrupted: wrote partial output ({len(exc.examples)}/{exc.total} documents) to {out}"
         )
     else:
-        examples = build_examples_llm(
-            docs,
+        progress.log(
+            f"interrupted: cancelled after {exc.completed}/{exc.total} documents; output not written"
+        )
+    return INTERRUPT_EXIT_CODE
+
+
+def _cli_error_message(exc: BaseException) -> str:
+    """Format a CLI failure for stderr (with hints for common LLM install issues)."""
+    message = str(exc).strip() or repr(exc)
+    if (
+        isinstance(exc, OSError)
+        and exc.errno == 2
+        and message in {"[Errno 2] No such file or directory", "No such file or directory"}
+    ):
+        return (
+            f"{message}\n"
+            "Often a broken optional LLM install on Windows (missing jiter files or DLL). "
+            "Try: uv sync --extra llm  then  uv pip install --force-reinstall jiter"
+        ).replace("\n", "\n  ")
+    return str(exc).replace("\n", "\n  ")
+
+
+def _run_build(
+    args: argparse.Namespace,
+    *,
+    settings: LlmGoldSettings,
+    progress: Progress,
+) -> int:
+    progress.verbose_log("starting build")
+    if args.source == "synthetic":
+        if args.synthetic_config is None:
+            print("error: --source synthetic requires --synthetic-config", file=sys.stderr)
+            return 2
+        progress.verbose_log(f"loading synthetic config: {args.synthetic_config}")
+        examples = build_examples_from_config_path(
+            args.synthetic_config,
             settings=settings,
-            num_samples=args.samples,
-            min_votes=args.min_votes,
             mock=args.mock or settings.mock_llm,
             progress=progress,
         )
+    else:
+        if args.mode == "manual" and args.source != "arxiv" and args.manual is None:
+            print(
+                "error: manual mode for non-arxiv sources requires --manual annotations file",
+                file=sys.stderr,
+            )
+            return 2
+
+        input_path = resolve_input_path(args.source, args.input)
+        progress.verbose_log(f"loading source documents from: {input_path}")
+        docs = load_documents(
+            args.source,
+            input_path,
+            limit=args.limit,
+            text_field=args.text_field,
+            glob_pattern=args.glob,
+        )
+        progress.verbose_log(f"loaded {len(docs)} documents")
+
+        if args.mode == "manual":
+            progress.verbose_log("running manual span resolution")
+            examples = build_examples_manual(
+                docs,
+                source=args.source,
+                manual_path=args.manual,
+                progress=progress,
+            )
+        else:
+            progress.verbose_log("running LLM consensus labeling")
+            examples = build_examples_llm(
+                docs,
+                settings=settings,
+                num_samples=args.samples,
+                min_votes=args.min_votes,
+                mock=args.mock or settings.mock_llm,
+                progress=progress,
+            )
 
     out = args.output
+    progress.verbose_log(f"writing JSONL output to: {out}")
     out.parent.mkdir(parents=True, exist_ok=True)
     lines = [json.dumps(ex, ensure_ascii=False) for ex in examples]
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
     if not args.quiet:
         sys.stderr.flush()
-    print(f"Wrote {out} ({len(examples)} examples, source={args.source}, mode={args.mode})")
+    mode_label = "synthetic" if args.source == "synthetic" else args.mode
+    print(f"Wrote {out} ({len(examples)} examples, source={args.source}, mode={mode_label})")
+    if not args.quiet:
+        for line in summarize_gold_build(examples, source=args.source, mode=mode_label):
+            print(line, file=sys.stderr)
     return 0
 
 

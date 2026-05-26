@@ -19,6 +19,7 @@ Full guides: **[docs/README.md](docs/README.md)**
 |-------|-----|
 | Install and first runs | [docs/getting-started.md](docs/getting-started.md) |
 | Input formats (arxiv, youtube, folder, jsonl) | [docs/input-sources.md](docs/input-sources.md) |
+| Synthetic gold (configurable corpus) | [docs/synthetic.md](docs/synthetic.md) |
 | Manual vs LLM labeling | [docs/labeling-modes.md](docs/labeling-modes.md) |
 | JSONL schema and labels | [docs/gold-schema.md](docs/gold-schema.md) |
 | CLI flags | [docs/cli.md](docs/cli.md) |
