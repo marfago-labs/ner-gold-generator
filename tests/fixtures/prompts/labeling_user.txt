@@ -1,0 +1,4 @@
+Labels: {labels}
+---TEXT---
+{text}
+---END---

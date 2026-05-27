@@ -6,6 +6,18 @@ import logging
 import os
 import sys
 
+_LOG_LEVELS = {
+    "DEBUG": logging.DEBUG,
+    "INFO": logging.INFO,
+    "WARNING": logging.WARNING,
+    "ERROR": logging.ERROR,
+}
+
+
+def _parse_log_level() -> int:
+    raw = os.environ.get("NER_GOLD_LOG_LEVEL", "DEBUG").strip().upper()
+    return _LOG_LEVELS.get(raw, logging.DEBUG)
+
 
 class _DynamicStderrHandler(logging.Handler):
     """Logging handler that always writes to the current ``sys.stderr``."""
@@ -53,6 +65,9 @@ def get_logger(name: str) -> logging.Logger:
         file_handler.setFormatter(fmt_file)
         logger.addHandler(file_handler)
 
-    logger.setLevel(logging.DEBUG)
+    level = _parse_log_level()
+    logger.setLevel(level)
+    for handler in logger.handlers:
+        handler.setLevel(level)
     logger.propagate = False
     return logger

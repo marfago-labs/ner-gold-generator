@@ -8,6 +8,7 @@ import random
 from pathlib import Path
 
 import pytest
+from tests.llm_test_helpers import make_llm_config
 
 from ner_gold_generator.build_gold import main
 from ner_gold_generator.llm_client import LlmRequestError
@@ -142,7 +143,7 @@ def test_build_examples_synthetic_llm_builds_worker_clients(
         {
             "num_documents": 2,
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free"},
+            "llm": make_llm_config(),
             "entities_per_document": {"distribution": "fixed", "fixed": 2},
         }
     )
@@ -212,7 +213,7 @@ def test_build_examples_synthetic_llm_mock() -> None:
         {
             "num_documents": 2,
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free"},
+            "llm": make_llm_config(),
             "entities_per_document": {"distribution": "fixed", "fixed": 3},
         }
     )
@@ -231,8 +232,9 @@ def test_parse_llm_timeout_and_request_delay() -> None:
 
 
 def test_load_synthetic_config_with_prompt_file(tmp_path: Path) -> None:
-    prompt = tmp_path / "prompt.txt"
-    prompt.write_text("You are a strict generator.", encoding="utf-8")
+    (tmp_path / "system.txt").write_text("You are a strict generator.", encoding="utf-8")
+    (tmp_path / "user.txt").write_text("User {entity_list}", encoding="utf-8")
+    (tmp_path / "feedback.txt").write_text("Fix {issues}", encoding="utf-8")
     cfg_path = tmp_path / "cfg.json"
     cfg_path.write_text(
         json.dumps(
@@ -240,7 +242,9 @@ def test_load_synthetic_config_with_prompt_file(tmp_path: Path) -> None:
                 "engine": "llm",
                 "llm": {
                     "model": "meta-llama/llama-3.3-70b-instruct:free",
-                    "prompt_file": "prompt.txt",
+                    "prompt_file": "system.txt",
+                    "user_prompt_file": "user.txt",
+                    "feedback_prompt_file": "feedback.txt",
                 },
             }
         ),
@@ -248,7 +252,8 @@ def test_load_synthetic_config_with_prompt_file(tmp_path: Path) -> None:
     )
     cfg = load_synthetic_config(cfg_path)
     assert cfg.llm.system_prompt == "You are a strict generator."
-    assert cfg.llm.prompt_file.endswith("prompt.txt")
+    assert cfg.llm.user_prompt == "User {entity_list}"
+    assert cfg.llm.feedback_prompt == "Fix {issues}"
 
 
 def test_load_synthetic_config_missing_prompt_file(tmp_path: Path) -> None:
@@ -265,7 +270,7 @@ def test_load_synthetic_config_missing_prompt_file(tmp_path: Path) -> None:
         ),
         encoding="utf-8",
     )
-    with pytest.raises(FileNotFoundError, match="Synthetic prompt file not found"):
+    with pytest.raises(FileNotFoundError, match="Synthetic system prompt file not found"):
         load_synthetic_config(cfg_path)
 
 
@@ -292,11 +297,8 @@ def test_generate_text_with_llm_request_delay_between_attempts(
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
-                "max_attempts": 2,
-                "request_delay_seconds": 0.01,
-            },
+            "llm": make_llm_config(max_attempts=2, request_delay_seconds=0.01),
+            "text_length": {"min_chars": 10, "max_chars": 5000},
         }
     )
     plan = [PlannedEntity("BERT", "model")]
@@ -339,13 +341,14 @@ def test_validate_llm_text_or_log_writes_failure_details(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from ner_gold_generator import llm_logging
     from ner_gold_generator import synthetic_compose as compose_mod
 
     log_path = tmp_path / "failures.log"
     monkeypatch.setenv("NER_GOLD_LOG_FILE", str(log_path))
     monkeypatch.setenv("NER_GOLD_LOG_STDERR", "0")
-    compose_mod._LOGGER.handlers.clear()
-    compose_mod._LOGGER = compose_mod.get_logger(compose_mod.__name__)
+    llm_logging._LOGGER.handlers.clear()
+    llm_logging._LOGGER = llm_logging.get_logger(llm_logging.__name__)
 
     plan = [PlannedEntity("BERT", "model")]
     err = compose_mod._validate_llm_text_or_log(
@@ -355,6 +358,8 @@ def test_validate_llm_text_or_log_writes_failure_details(
         model_id="test/model",
         attempt=2,
         call_budget=7,
+        min_chars=1,
+        max_chars=9999,
     )
     assert err is not None
     log_text = log_path.read_text(encoding="utf-8")
@@ -367,11 +372,7 @@ def test_generate_text_with_llm_respects_validation_retry_budget() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
-                "provider_max_attempts": 5,
-                "validation_max_attempts": 2,
-            },
+            "llm": make_llm_config(provider_max_attempts=5, validation_max_attempts=2),
         }
     )
     plan = [PlannedEntity("BERT", "model")]
@@ -404,11 +405,7 @@ def test_invalid_json_counts_as_provider_failure() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
-                "provider_max_attempts": 2,
-                "validation_max_attempts": 5,
-            },
+            "llm": make_llm_config(provider_max_attempts=2, validation_max_attempts=5),
         }
     )
     plan = [PlannedEntity("BERT", "model")]
@@ -438,15 +435,33 @@ def test_invalid_json_counts_as_provider_failure() -> None:
     assert client.calls == 2
 
 
+def test_generate_text_with_llm_non_retryable_provider_fails_fast() -> None:
+    config = parse_synthetic_config_dict(
+        {"engine": "llm", "llm": make_llm_config(provider_max_attempts=5)}
+    )
+    plan = [PlannedEntity("BERT", "model")]
+
+    class _AuthFail:
+        def complete_json(
+            self,
+            *,
+            system: str,
+            user: str,
+            temperature: float,
+            call_label: str | None = None,
+        ) -> dict:
+            del system, user, temperature, call_label
+            raise LlmRequestError("forbidden", retryable=False)
+
+    with pytest.raises(ValueError, match="reason=provider"):
+        generate_text_with_llm(plan, config, settings=None, mock=False, client=_AuthFail())
+
+
 def test_generate_text_with_llm_respects_provider_retry_budget() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
-                "provider_max_attempts": 2,
-                "validation_max_attempts": 5,
-            },
+            "llm": make_llm_config(provider_max_attempts=2, validation_max_attempts=5),
         }
     )
     plan = [PlannedEntity("BERT", "model")]
@@ -477,10 +492,7 @@ def test_parse_llm_retry_budgets_fallback_to_max_attempts() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
-                "max_attempts": 4,
-            },
+            "llm": make_llm_config(max_attempts=4),
         }
     )
     assert config.llm.provider_max_attempts == 4
@@ -491,7 +503,7 @@ def test_generate_text_with_llm_on_status_before_call() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free"},
+            "llm": make_llm_config(),
         }
     )
     plan = plan_entities_for_document(random.Random(0), config)
@@ -524,7 +536,7 @@ def test_generate_text_with_llm_reports_elapsed_per_call() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free"},
+            "llm": make_llm_config(),
         }
     )
     plan = plan_entities_for_document(random.Random(0), config)
@@ -562,7 +574,7 @@ def test_generate_text_with_llm_mock_client() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free"},
+            "llm": make_llm_config(),
         }
     )
     plan = plan_entities_for_document(random.Random(0), config)
@@ -709,10 +721,7 @@ def test_generate_text_with_llm_retries_then_succeeds() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {
-                "model": "meta-llama/llama-3.3-70b-instruct:free",
-                "max_attempts": 3,
-            },
+            "llm": make_llm_config(max_attempts=3),
         }
     )
     plan = [PlannedEntity("BERT", "model"), PlannedEntity("GLUE", "dataset")]
@@ -746,7 +755,7 @@ def test_llm_engine_with_settings_mock_llm() -> None:
         {
             "num_documents": 1,
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free"},
+            "llm": make_llm_config(),
             "entities_per_document": {"distribution": "fixed", "fixed": 2},
         }
     )
@@ -784,10 +793,21 @@ def test_build_user_prompt_and_meta_json() -> None:
     )
 
     plan = [PlannedEntity("X", "model")]
-    prompt = build_synthetic_user_prompt(plan, domain="news", min_chars=1, max_chars=9)
+    cfg = parse_synthetic_config_dict(
+        {
+            "llm": make_llm_config(),
+            "text_length": {"min_chars": 1, "max_chars": 9},
+        }
+    )
+    prompt = build_synthetic_user_prompt(
+        plan,
+        config=cfg,
+        document_type="news",
+        style_description="News article style",
+    )
     assert "news" in prompt and "X" in prompt
-    cfg = parse_synthetic_config_dict({})
-    assert '"seed": 42' in config_summary_json(cfg)
+    meta_cfg = parse_synthetic_config_dict({})
+    assert '"seed": 42' in config_summary_json(meta_cfg)
 
 
 def test_uniform_entity_count() -> None:

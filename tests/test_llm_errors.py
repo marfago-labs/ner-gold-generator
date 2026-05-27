@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+from tests.llm_test_helpers import make_llm_config
 
 from ner_gold_generator.llm_client import (
     LlmRequestError,
@@ -143,7 +144,7 @@ def test_generate_text_with_llm_model_not_found_fails_fast() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {"model": "bad/model:free", "max_attempts": 3},
+            "llm": make_llm_config(model="bad/model:free", max_attempts=3),
         }
     )
     plan = plan_entities_for_document(random.Random(0), config)
@@ -306,7 +307,7 @@ def test_synthetic_requires_api_key_when_llm(monkeypatch: pytest.MonkeyPatch) ->
         {
             "num_documents": 1,
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free"},
+            "llm": make_llm_config(),
         }
     )
     settings = LlmGoldSettings.model_construct(openrouter_api_key="", mock_llm=False)
@@ -365,11 +366,12 @@ def test_generate_text_with_llm_retries_rate_limit() -> None:
     config = parse_synthetic_config_dict(
         {
             "engine": "llm",
-            "llm": {"model": "meta-llama/llama-3.3-70b-instruct:free", "max_attempts": 2},
+            "llm": make_llm_config(max_attempts=2),
+            "text_length": {"min_chars": 10, "max_chars": 5000},
         }
     )
     plan = [PlannedEntity("BERT", "model")]
-    good = {"text": "We study BERT on GLUE."}
+    good = {"text": "We study BERT on GLUE and report strong results across benchmarks."}
 
     class _ThenOkClient:
         def __init__(self) -> None:

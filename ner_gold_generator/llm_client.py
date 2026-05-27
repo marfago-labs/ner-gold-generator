@@ -4,15 +4,11 @@ from __future__ import annotations
 
 import json
 import re
-import threading
 import time
 from collections.abc import Callable
 from typing import Any, NoReturn, Protocol
 
-from ner_gold_generator.logger import get_logger
-
-_STDERR_LOG_LOCK = threading.Lock()
-_LOGGER = get_logger(__name__)
+from ner_gold_generator.llm_logging import log_llm_prompt, log_llm_response
 
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/models"
@@ -309,53 +305,6 @@ def parse_entities_json(raw: str) -> list[dict[str, str]]:
         if isinstance(text, str) and isinstance(label, str):
             out.append({"text": text, "label": label})
     return out
-
-
-def log_llm_prompt(
-    *,
-    model_id: str,
-    system: str,
-    user: str,
-    temperature: float,
-    call_label: str | None = None,
-) -> None:
-    """Print the full system and user prompts sent to a live LLM (stderr)."""
-    header = f"--- LLM prompt ({model_id}, temperature={temperature}"
-    if call_label:
-        header += f", {call_label}"
-    payload = "\n".join(
-        (
-            f"{header}) ---",
-            "SYSTEM:",
-            system,
-            "USER:",
-            user,
-            "--- end LLM prompt ---",
-        )
-    )
-    with _STDERR_LOG_LOCK:
-        _LOGGER.debug(payload)
-
-
-def log_llm_response(
-    *,
-    model_id: str,
-    raw: str,
-    call_label: str | None = None,
-) -> None:
-    """Print the raw model text returned from a live LLM call (stderr)."""
-    header = f"--- LLM response ({model_id}"
-    if call_label:
-        header += f", {call_label}"
-    payload = "\n".join(
-        (
-            f"{header}) ---",
-            raw if raw.strip() else "(empty)",
-            "--- end LLM response ---",
-        )
-    )
-    with _STDERR_LOG_LOCK:
-        _LOGGER.debug(payload)
 
 
 class OpenRouterChatClient:

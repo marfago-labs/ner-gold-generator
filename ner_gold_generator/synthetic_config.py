@@ -9,6 +9,14 @@ from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
+class DocumentTypeWeight:
+    """Weighted document type for mixed synthetic runs."""
+
+    type: str
+    weight: float
+
+
+@dataclass(frozen=True, slots=True)
 class TextLengthConfig:
     min_chars: int = 200
     max_chars: int = 800
@@ -46,8 +54,14 @@ class LlmSyntheticConfig:
     timeout_seconds: float = 120.0
     request_delay_seconds: float = 0.0
     parallelism: int = 3
+    agent_mode: str = "per_doc"
+    agno_db_path: str = ""
     system_prompt: str = ""
     prompt_file: str = ""
+    user_prompt: str = ""
+    user_prompt_file: str = ""
+    feedback_prompt: str = ""
+    feedback_prompt_file: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +72,9 @@ class SyntheticConfig:
     num_documents: int = 10
     engine: str = "procedural"
     domain: str = "scientific_abstract"
+    document_type: str = ""
+    document_types: tuple[DocumentTypeWeight, ...] = ()
+    document_profiles_dir: str = "document_profiles"
     text_length: TextLengthConfig = field(default_factory=TextLengthConfig)
     entities_per_document: EntitiesPerDocumentConfig = field(
         default_factory=EntitiesPerDocumentConfig
@@ -89,6 +106,14 @@ class SyntheticConfig:
         if total <= 0:
             raise ValueError("label_weights must sum to a positive value")
         return {k: v / total for k, v in self.label_weights.items()}
+
+    def effective_document_type(self) -> str:
+        """Primary document type id (explicit field, mixed default, or domain alias)."""
+        if self.document_type.strip():
+            return self.document_type.strip()
+        if self.document_types:
+            return self.document_types[0].type
+        return self.domain.strip() or "scientific_abstract"
 
 
 _DEFAULT_TEMPLATES = (
@@ -147,6 +172,9 @@ def _parse_llm(raw: dict[str, Any]) -> LlmSyntheticConfig:
     max_attempts = max(1, int(raw.get("max_attempts", 3)))
     provider_attempts = int(raw.get("provider_max_attempts", max_attempts))
     validation_attempts = int(raw.get("validation_max_attempts", max_attempts))
+    agent_mode = str(raw.get("agent_mode", "per_doc")).strip().lower()
+    if agent_mode not in {"per_doc", "stateless"}:
+        raise ValueError(f"llm.agent_mode must be 'per_doc' or 'stateless', got {agent_mode!r}")
     return LlmSyntheticConfig(
         model=str(raw.get("model", "")).strip(),
         max_attempts=max_attempts,
@@ -156,15 +184,59 @@ def _parse_llm(raw: dict[str, Any]) -> LlmSyntheticConfig:
         timeout_seconds=float(raw.get("timeout_seconds", 120.0)),
         request_delay_seconds=float(raw.get("request_delay_seconds", 0.0)),
         parallelism=max(1, int(raw.get("parallelism", 3))),
+        agent_mode=agent_mode,
+        agno_db_path=str(raw.get("agno_db_path", "")).strip(),
         system_prompt=str(raw.get("system_prompt", "")),
         prompt_file=str(raw.get("prompt_file", "")).strip(),
+        user_prompt=str(raw.get("user_prompt", "")),
+        user_prompt_file=str(raw.get("user_prompt_file", "")).strip(),
+        feedback_prompt=str(raw.get("feedback_prompt", "")),
+        feedback_prompt_file=str(raw.get("feedback_prompt_file", "")).strip(),
     )
+
+
+def _resolve_prompt_path(path_str: str, config_path: Path) -> Path:
+    prompt_path = Path(path_str)
+    if not prompt_path.is_absolute():
+        prompt_path = (config_path.parent / prompt_path).resolve()
+    return prompt_path
+
+
+def _load_prompt_file(path_str: str, config_path: Path, label: str) -> str:
+    if not path_str.strip():
+        return ""
+    prompt_path = _resolve_prompt_path(path_str, config_path)
+    if not prompt_path.is_file():
+        raise FileNotFoundError(f"Synthetic {label} prompt file not found: {prompt_path}")
+    return prompt_path.read_text(encoding="utf-8").strip()
+
+
+def parse_document_types(raw: object) -> tuple[DocumentTypeWeight, ...]:
+    """Parse ``document_types`` list from config JSON."""
+    if not isinstance(raw, list):
+        return ()
+    out: list[DocumentTypeWeight] = []
+    for item in raw:
+        if not isinstance(item, dict):
+            continue
+        type_id = str(item.get("type", "")).strip()
+        if not type_id:
+            continue
+        out.append(DocumentTypeWeight(type=type_id, weight=float(item.get("weight", 1.0))))
+    return tuple(out)
 
 
 def validate_synthetic_config(config: SyntheticConfig) -> None:
     """Validate cross-field constraints on a parsed config."""
     if config.engine.lower() == "llm" and not config.llm.model.strip():
         raise ValueError("engine=llm requires llm.model in the synthetic config file")
+    if config.engine.lower() == "llm":
+        if not config.llm.system_prompt.strip():
+            raise ValueError("engine=llm requires llm.system_prompt or llm.prompt_file")
+        if not config.llm.user_prompt.strip():
+            raise ValueError("engine=llm requires llm.user_prompt or llm.user_prompt_file")
+        if not config.llm.feedback_prompt.strip():
+            raise ValueError("engine=llm requires llm.feedback_prompt or llm.feedback_prompt_file")
 
 
 def load_synthetic_config(path: Path) -> SyntheticConfig:
@@ -185,20 +257,34 @@ def load_synthetic_config(path: Path) -> SyntheticConfig:
     if not isinstance(raw, dict):
         raise ValueError(f"Synthetic config must be a mapping in {path}")
     config = parse_synthetic_config_dict(raw)
-    if config.llm.prompt_file:
-        prompt_path = Path(config.llm.prompt_file)
-        if not prompt_path.is_absolute():
-            prompt_path = (path.parent / prompt_path).resolve()
-        if not prompt_path.is_file():
-            raise FileNotFoundError(f"Synthetic prompt file not found: {prompt_path}")
-        config = replace(
-            config,
-            llm=replace(
-                config.llm,
-                system_prompt=prompt_path.read_text(encoding="utf-8").strip(),
-                prompt_file=str(prompt_path),
-            ),
-        )
+    llm = config.llm
+    system_prompt = llm.system_prompt
+    prompt_file = llm.prompt_file
+    if llm.prompt_file:
+        system_prompt = _load_prompt_file(llm.prompt_file, path, "system")
+        prompt_file = str(_resolve_prompt_path(llm.prompt_file, path))
+    user_prompt = llm.user_prompt
+    user_prompt_file = llm.user_prompt_file
+    if llm.user_prompt_file:
+        user_prompt = _load_prompt_file(llm.user_prompt_file, path, "user")
+        user_prompt_file = str(_resolve_prompt_path(llm.user_prompt_file, path))
+    feedback_prompt = llm.feedback_prompt
+    feedback_prompt_file = llm.feedback_prompt_file
+    if llm.feedback_prompt_file:
+        feedback_prompt = _load_prompt_file(llm.feedback_prompt_file, path, "feedback")
+        feedback_prompt_file = str(_resolve_prompt_path(llm.feedback_prompt_file, path))
+    config = replace(
+        config,
+        llm=replace(
+            llm,
+            system_prompt=system_prompt,
+            prompt_file=prompt_file,
+            user_prompt=user_prompt,
+            user_prompt_file=user_prompt_file,
+            feedback_prompt=feedback_prompt,
+            feedback_prompt_file=feedback_prompt_file,
+        ),
+    )
     validate_synthetic_config(config)
     return config
 
@@ -233,11 +319,19 @@ def parse_synthetic_config_dict(raw: dict[str, Any]) -> SyntheticConfig:
         for label, weight in label_weights_raw.items():
             label_weights[str(label)] = float(weight)
 
+    domain = str(raw.get("domain", "scientific_abstract"))
+    document_type = str(raw.get("document_type", "")).strip()
+    if not document_type and domain:
+        document_type = domain
+
     return SyntheticConfig(
         seed=int(raw.get("seed", 42)),
         num_documents=int(raw.get("num_documents", 10)),
         engine=str(raw.get("engine", "procedural")),
-        domain=str(raw.get("domain", "scientific_abstract")),
+        domain=domain,
+        document_type=document_type,
+        document_types=parse_document_types(raw.get("document_types")),
+        document_profiles_dir=str(raw.get("document_profiles_dir", "document_profiles")),
         text_length=text_length,
         entities_per_document=epd,
         label_weights=label_weights,

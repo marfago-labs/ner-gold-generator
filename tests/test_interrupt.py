@@ -128,6 +128,8 @@ def test_build_examples_synthetic_procedural_interrupt(monkeypatch: pytest.Monke
 
 
 def test_build_examples_synthetic_llm_parallel_interrupt(monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.llm_test_helpers import make_llm_config
+
     from ner_gold_generator import synthetic as syn_mod
     from ner_gold_generator.labeling import LlmGoldSettings
     from ner_gold_generator.synthetic_compose import assemble_mock_llm_text
@@ -137,7 +139,7 @@ def test_build_examples_synthetic_llm_parallel_interrupt(monkeypatch: pytest.Mon
         {
             "num_documents": 3,
             "engine": "llm",
-            "llm": {"model": "test/model", "parallelism": 2},
+            "llm": make_llm_config(model="test/model", parallelism=2),
             "entities_per_document": {"distribution": "fixed", "fixed": 1},
         }
     )

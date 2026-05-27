@@ -139,6 +139,49 @@ def test_summarize_llm_labeling_meta() -> None:
     assert "llm min votes: 2" in text
 
 
+def test_format_elapsed_minutes_and_hours() -> None:
+    from ner_gold_generator.build_stats import _format_elapsed
+
+    assert "m" in _format_elapsed(125.0)
+    assert "h" in _format_elapsed(3700.0)
+
+
+def test_summarize_empty_with_requested_and_elapsed() -> None:
+    lines = summarize_gold_build(
+        [],
+        source="synthetic",
+        mode="synthetic",
+        requested_documents=10,
+        elapsed_seconds=3.2,
+    )
+    text = "\n".join(lines)
+    assert "requested documents: 10" in text
+    assert "elapsed:" in text
+
+
+def test_summarize_many_skipped_truncated() -> None:
+    skipped = [{"id": f"doc-{i}", "error": f"reason=provider err {i}"} for i in range(8)]
+    text = "\n".join(
+        summarize_gold_build(
+            [{"text": "x", "entities": []}],
+            source="synthetic",
+            mode="synthetic",
+            skipped_documents=skipped,
+        )
+    )
+    assert "skipped documents: 8" in text
+    assert "3 more" in text
+
+
+def test_summarize_synthetic_without_meta() -> None:
+    lines = summarize_gold_build(
+        [{"text": "plain", "entities": []}],
+        source="synthetic",
+        mode="synthetic",
+    )
+    assert any("documents: 1" in line for line in lines)
+
+
 def test_summarize_manual_rows() -> None:
     examples = [
         {

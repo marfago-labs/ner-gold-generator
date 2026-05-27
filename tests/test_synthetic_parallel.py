@@ -6,6 +6,7 @@ import asyncio
 from unittest.mock import MagicMock, patch
 
 import pytest
+from tests.llm_test_helpers import make_llm_config
 
 from ner_gold_generator.labeling import LlmGoldSettings
 from ner_gold_generator.synthetic import build_examples_synthetic
@@ -20,7 +21,7 @@ def test_parallelism_one_runs_sequential_no_tasks(monkeypatch: pytest.MonkeyPatc
         {
             "num_documents": 2,
             "engine": "llm",
-            "llm": {"model": "test/model", "parallelism": 1},
+            "llm": make_llm_config(model="test/model", parallelism=1),
             "entities_per_document": {"distribution": "fixed", "fixed": 1},
         }
     )
@@ -56,7 +57,7 @@ def test_parallel_worker_failure_cancels_pending_tasks(monkeypatch: pytest.Monke
         {
             "num_documents": 2,
             "engine": "llm",
-            "llm": {"model": "test/model", "parallelism": 2},
+            "llm": make_llm_config(model="test/model", parallelism=2),
             "entities_per_document": {"distribution": "fixed", "fixed": 1},
         }
     )

@@ -25,8 +25,8 @@ Flow:
 
 1. **Plan** entities from `seed` + `label_weights` + generators (deterministic surfaces).
 2. **Prompt** the LLM: system rules (JSON + verbatim constraints) and a per-document user message listing required spans (domain/length from config).
-3. **Validate** the response: each planned surface must appear **exactly once** (counted with a regex on `re.escape(surface)`).
-4. **Retry** up to `llm.max_attempts` if any surface is missing or duplicated.
+3. **Validate** the response: each planned surface must appear **exactly once**, and text length must fall within `text_length.min_chars`–`max_chars`.
+4. **Retry** with separate budgets: `llm.provider_max_attempts` (API/JSON errors) and `llm.validation_max_attempts` (missing/duplicate surfaces, length). Legacy `llm.max_attempts` sets both when the split knobs are omitted.
 5. **Skip** the document if it still fails after all attempts; continue with the rest.
 6. **Gold** offsets come from the plan, not from LLM-extracted NER.
 
@@ -58,10 +58,46 @@ Use `--mock` only for CI/tests; it skips the API and uses template assembly even
 | `llm.timeout_seconds` | Per-request HTTP timeout (default `120`; lower if a run seems stuck) |
 | `llm.request_delay_seconds` | Pause before retries (helps free-tier rate limits) |
 | `llm.parallelism` | Number of concurrent synthetic LLM document calls (default `3`; use `1` for sequential, no thread pool) |
-| `llm.prompt_file` | Path (relative to config file or absolute) to system prompt text file |
-| `llm.system_prompt` | Inline system prompt string (used when `prompt_file` is not set) |
+| `llm.agent_mode` | `per_doc` (default): Agno session per document with in-session feedback turns; `stateless`: one-shot OpenRouter JSON loop per attempt |
+| `llm.agno_db_path` | SQLite path for Agno session history (`:memory:` default; one DB per document build) |
+| `llm.prompt_file` | System prompt text file (relative to config dir or absolute) |
+| `llm.user_prompt_file` | User prompt template for the first turn (`{document_type}`, `{style_description}`, `{entity_list}`, `{min_chars}`, `{max_chars}`, …) |
+| `llm.feedback_prompt_file` | Validation feedback template for retry turns (`{issues}`, `{min_chars}`, `{max_chars}`) |
+| `llm.system_prompt` | Inline system prompt (only when `prompt_file` is not set; tests may use inline strings) |
+| `document_type` | Single genre id for all documents (e.g. `scientific_abstract`, `news_article`) |
+| `document_types` | Weighted mix, e.g. `[{"type": "news_article", "weight": 0.5}, {"type": "blog_post", "weight": 0.5}]` |
+| `document_profiles_dir` | Directory of YAML/JSON profiles (default `document_profiles` next to the config) |
 
-With live OpenRouter calls, each request logs the full prompt and raw model response to **`gold.log`** by default (`--- LLM prompt (...) ---`, `--- LLM response (...) ---`), including retries. Validation failures also log the **planned entities**, **error details**, and the **generated text** that failed (search for `synthetic failure` or `synthetic failure (final_` in `gold.log`). Set `NER_GOLD_LOG_STDERR=1` to mirror debug logs to stderr.
+`engine: llm` requires all three prompt files (`prompt_file`, `user_prompt_file`, `feedback_prompt_file`) or inline equivalents in tests.
+
+### Document profiles (multi-genre)
+
+Profiles under `configs/document_profiles/` override style, templates, lexicon, and optional `text_length` per genre:
+
+| Profile id | Typical use |
+|------------|-------------|
+| `scientific_abstract` | Paper-style abstracts |
+| `news_article` | News wire tone |
+| `blog_post` | Informal blog |
+| `transcript` | Spoken/interview style |
+
+Example configs: `configs/synthetic_news.json`, `synthetic_blog.json`, `synthetic_transcript.json`, `synthetic_mixed.json`. Each output row sets `synthetic_meta.document_type` to the profile used for that document.
+
+### Logging (`gold.log`)
+
+With live LLM calls, prompts and responses are logged to **`gold.log`** (structured, grep-friendly):
+
+- Stateless: `--- LLM prompt (engine=stateless, doc=..., attempt X/Y) ---` / matching response blocks.
+- Agno `per_doc`: `synthetic session start`, `Agno prompt (turn=N/M, initial|feedback)`, `Agno response`, `synthetic session success`.
+- Failures: `synthetic failure` / `synthetic failure (final_validation)` with planned entities and last generated text.
+
+Useful greps: `Agno prompt`, `synthetic session`, `synthetic failure`, `prompt_kind=feedback`.
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `NER_GOLD_LOG_FILE` | `gold.log` | Log file path |
+| `NER_GOLD_LOG_LEVEL` | `INFO` | Set `DEBUG` for full prompt bodies; `WARNING` hides DEBUG prompts but keeps failure lines |
+| `NER_GOLD_LOG_STDERR` | `0` | Set `1` to mirror logs to stderr |
 
 **Stuck on `LLM 2/3`?** The bar only updates between steps. During `calling OpenRouter…` the client is waiting on the API (reasoning models can take minutes). Prefer instruct/chat `:free` models over `*:reasoning:free`, or use `engine: procedural` for offline runs.
 

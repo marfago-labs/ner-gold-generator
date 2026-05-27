@@ -1,0 +1,20 @@
+id: news_article
+style_description: >
+  A short news article with a clear lead sentence, wire-service tone, factual
+  reporting. One to three paragraphs. No byline required.
+templates:
+  - "{e0} announced {e1} on {e2}, citing {e3} from {e4}."
+  - "Officials in {e0} said {e1} would affect {e2} after {e3} reported {e4}."
+lexicon:
+  organization: ["Reuters", "Associated Press", "BBC", "The Guardian"]
+  person: ["Jane Smith", "John Doe", "Maria Garcia"]
+  location: ["London", "New York", "Berlin", "Tokyo"]
+label_weights:
+  organization: 0.2
+  person: 0.2
+  location: 0.2
+  date: 0.15
+  number: 0.1
+text_length:
+  min_chars: 300
+  max_chars: 1200

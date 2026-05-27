@@ -65,6 +65,44 @@ def test_load_manual_invalid_span_entry(tmp_path: Path) -> None:
         load_manual_annotations(path)
 
 
+def test_load_manual_yaml_import_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    path = tmp_path / "m.yaml"
+    path.write_text("doc-1:\n  - text: A\n    label: model\n", encoding="utf-8")
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def _import(name, *args, **kwargs):
+        if name == "yaml":
+            raise ImportError("no yaml")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _import)
+    with pytest.raises(ImportError, match="PyYAML"):
+        load_manual_annotations(path)
+
+
+def test_load_manual_top_level_not_mapping(tmp_path: Path) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text("[]", encoding="utf-8")
+    with pytest.raises(ValueError, match="mapping"):
+        load_manual_annotations(path)
+
+
+def test_resolve_manual_bare_arxiv_key() -> None:
+    ann = {"1706.03762": [("Transformer", "model")]}
+    spans = resolve_manual_spans("arxiv-1706.03762", source="arxiv", file_annotations=ann)
+    assert spans == [("Transformer", "model")]
+
+
+def test_resolve_manual_invalid_span_type(tmp_path: Path) -> None:
+    path = tmp_path / "bad.json"
+    path.write_text('{"x": ["not-a-dict"]}', encoding="utf-8")
+    with pytest.raises(ValueError, match="Invalid span"):
+        load_manual_annotations(path)
+
+
 def test_load_manual_yaml(tmp_path: Path) -> None:
     path = tmp_path / "m.yaml"
     path.write_text(

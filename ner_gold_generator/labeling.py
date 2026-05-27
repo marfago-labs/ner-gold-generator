@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,7 @@ from ner_gold_generator.llm_client import (
     verify_llm_installation,
 )
 from ner_gold_generator.mock import mock_extract_entities
+from ner_gold_generator.prompt_templates import render_template
 from ner_gold_generator.types import ProposedEntity, ValidatedEntity
 from ner_gold_generator.validate import normalize_entity_label, validate_proposed_entities
 
@@ -40,18 +42,7 @@ _DEFAULT_LABELS = (
     "percentage",
 )
 
-_SYSTEM_PROMPT = """You annotate named entities in scientific text for NER evaluation gold data.
-
-Rules:
-- Copy entity text EXACTLY as it appears in the source (character-for-character).
-- Do not paraphrase, normalize, or invent spans that are not in the text.
-- Do not include paper titles unless they appear verbatim in the text block.
-- Prefer high-precision: omit uncertain entities.
-- Use only these labels: {labels}
-
-Respond with JSON only:
-{{"entities": [{{"text": "<verbatim span>", "label": "<label>"}}]}}
-"""
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 class LlmGoldSettings(BaseSettings):
@@ -81,6 +72,56 @@ class LlmGoldSettings(BaseSettings):
     llm_gold_min_votes: int = Field(default=0, alias="LLM_GOLD_MIN_VOTES")
     llm_gold_temperature: float = Field(default=0.4, alias="LLM_GOLD_TEMPERATURE")
     mock_llm: bool = Field(default=False, alias="MOCK_LLM")
+    llm_gold_system_prompt_file: str = Field(
+        default="",
+        alias="LLM_GOLD_SYSTEM_PROMPT_FILE",
+    )
+    llm_gold_user_prompt_file: str = Field(
+        default="",
+        alias="LLM_GOLD_USER_PROMPT_FILE",
+    )
+
+
+def _resolve_labeling_prompt_path(
+    settings: LlmGoldSettings, configured: str, default_name: str
+) -> Path:
+    if configured.strip():
+        path = Path(configured)
+        if not path.is_absolute():
+            path = (_REPO_ROOT / path).resolve()
+        return path
+    return (_REPO_ROOT / "configs" / default_name).resolve()
+
+
+@lru_cache(maxsize=4)
+def _read_prompt_file(path: str) -> str:
+    return Path(path).read_text(encoding="utf-8").strip()
+
+
+def labeling_system_prompt(settings: LlmGoldSettings | None, *, labels: tuple[str, ...]) -> str:
+    """Render the labeling system prompt from config file."""
+    cfg = settings or LlmGoldSettings()
+    path = _resolve_labeling_prompt_path(
+        cfg, cfg.llm_gold_system_prompt_file, "labeling_system_prompt.txt"
+    )
+    if not path.is_file():
+        raise FileNotFoundError(f"Labeling system prompt not found: {path}")
+    template = _read_prompt_file(str(path))
+    return render_template(template, labels=", ".join(labels))
+
+
+def labeling_user_prompt(
+    settings: LlmGoldSettings | None, *, labels: tuple[str, ...], text: str
+) -> str:
+    """Render the labeling user prompt from config file."""
+    cfg = settings or LlmGoldSettings()
+    path = _resolve_labeling_prompt_path(
+        cfg, cfg.llm_gold_user_prompt_file, "labeling_user_prompt.txt"
+    )
+    if not path.is_file():
+        raise FileNotFoundError(f"Labeling user prompt not found: {path}")
+    template = _read_prompt_file(str(path))
+    return render_template(template, labels=", ".join(labels), text=text)
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,16 +217,6 @@ def build_chat_client(
     )
 
 
-def _user_prompt(text: str, *, labels: tuple[str, ...]) -> str:
-    """Build the user message containing the source text block."""
-    label_list = ", ".join(labels)
-    return (
-        f"Extract named entities from the text below.\n\n"
-        f"Allowed labels: {label_list}\n\n"
-        f"---TEXT---\n{text}\n---END---"
-    )
-
-
 def _parse_run(payload: dict[str, Any]) -> list[ProposedEntity]:
     """Parse one LLM JSON payload into proposed entities."""
     entities = payload.get("entities")
@@ -210,6 +241,7 @@ def extract_entities_once(
     client: ChatClient,
     text: str,
     *,
+    settings: LlmGoldSettings | None = None,
     labels: tuple[str, ...] = _DEFAULT_LABELS,
     temperature: float = 0.4,
     call_label: str | None = None,
@@ -226,8 +258,8 @@ def extract_entities_once(
     Returns:
         Proposed entities with normalized labels (not yet anchored).
     """
-    system = _SYSTEM_PROMPT.format(labels=", ".join(labels))
-    user = _user_prompt(text, labels=labels)
+    system = labeling_system_prompt(settings, labels=labels)
+    user = labeling_user_prompt(settings, labels=labels, text=text)
     payload = client.complete_json(
         system=system,
         user=user,
@@ -287,6 +319,7 @@ def label_text_with_llm_consensus(
             extract_entities_once(
                 chat,
                 text,
+                settings=cfg,
                 labels=labels,
                 temperature=temp,
                 call_label=f"sample {sample_idx + 1}/{n}",

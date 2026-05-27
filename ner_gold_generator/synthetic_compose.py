@@ -9,7 +9,7 @@ import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import NoReturn
+from typing import TYPE_CHECKING, NoReturn
 
 from ner_gold_generator.labeling import LlmGoldSettings, build_chat_client
 from ner_gold_generator.llm_client import (
@@ -22,12 +22,14 @@ from ner_gold_generator.llm_client import (
     retry_after_seconds_from_error,
     wait_for_retry,
 )
-from ner_gold_generator.logger import get_logger
+from ner_gold_generator.llm_logging import log_synthetic_failure
+from ner_gold_generator.prompt_templates import render_template
 from ner_gold_generator.synthetic_config import SyntheticConfig
 from ner_gold_generator.synthetic_generators import PlannedEntity
 from ner_gold_generator.validate import index_unique_span
 
-_LOGGER = get_logger(__name__)
+if TYPE_CHECKING:
+    from ner_gold_generator.synthetic_agno import AgnoAgentProtocol
 
 
 def _llm_call_budget(provider_max_attempts: int, validation_max_attempts: int) -> int:
@@ -109,26 +111,24 @@ def _log_synthetic_failure(
     text: str | None = None,
     plan: list[PlannedEntity] | None = None,
     audit: PlanEntityUsageAudit | None = None,
+    agent_mode: str | None = None,
+    turn: int | None = None,
+    document_type: str | None = None,
 ) -> None:
-    """Write a failing LLM attempt to ``gold.log`` for debugging."""
-    header = f"synthetic failure ({failure_kind})"
-    if document_id:
-        header += f" doc={document_id}"
-    header += f" model={model_id} attempt={attempt}/{call_budget}"
-    lines = [header, f"errors: {message}"]
-    if plan:
-        lines.append("planned entities:")
-        for ent in plan:
-            lines.append(f"  - [{ent.label}] {ent.surface}")
-    if audit is not None:
-        lines.append(f"occurrence_counts: {audit.occurrence_counts}")
-        if audit.missing:
-            lines.append(f"missing: {list(audit.missing)}")
-        if audit.duplicate_in_text:
-            lines.append(f"duplicate_in_text: {list(audit.duplicate_in_text)}")
-    lines.append("generated text:")
-    lines.append(text if text else "(empty)")
-    _LOGGER.warning("\n".join(lines))
+    log_synthetic_failure(
+        document_id=document_id,
+        model_id=model_id,
+        attempt=attempt,
+        call_budget=call_budget,
+        failure_kind=failure_kind,
+        message=message,
+        text=text,
+        plan=plan,
+        audit=audit,
+        agent_mode=agent_mode,
+        turn=turn,
+        document_type=document_type,
+    )
 
 
 def _handle_provider_response_error(
@@ -161,6 +161,45 @@ def _handle_provider_response_error(
     return message, raw_text
 
 
+def collect_validation_issues(
+    text: str,
+    plan: list[PlannedEntity],
+    *,
+    min_chars: int,
+    max_chars: int,
+) -> list[str]:
+    """Return human-readable validation errors (empty list when valid)."""
+    issues: list[str] = []
+    if not text:
+        issues.append("empty text from LLM")
+        return issues
+    n = len(text)
+    if n < min_chars or n > max_chars:
+        issues.append(f"length is {n} characters, target is {min_chars}-{max_chars} characters")
+    issues.extend(validate_text_contains_plan(text, plan))
+    audit = audit_plan_entity_usage(text, plan)
+    if audit.used_exactly_once != audit.planned:
+        issues.append(f"audit mismatch: used={audit.used_exactly_once} planned={audit.planned}")
+    return issues
+
+
+def build_validation_feedback(
+    issues: list[str],
+    *,
+    config: SyntheticConfig,
+    min_chars: int,
+    max_chars: int,
+) -> str:
+    """Render the feedback user message from config template."""
+    bullet = "\n".join(f"- {e}" for e in issues)
+    return render_template(
+        config.llm.feedback_prompt,
+        issues=bullet,
+        min_chars=min_chars,
+        max_chars=max_chars,
+    )
+
+
 def _validate_llm_text_or_log(
     text: str,
     plan: list[PlannedEntity],
@@ -169,50 +208,31 @@ def _validate_llm_text_or_log(
     model_id: str,
     attempt: int,
     call_budget: int,
+    min_chars: int,
+    max_chars: int,
+    agent_mode: str | None = None,
+    document_type: str | None = None,
 ) -> str | None:
     """Return an error message when validation fails (and log details); else ``None``."""
-    if not text:
-        _log_synthetic_failure(
-            document_id=document_id,
-            model_id=model_id,
-            attempt=attempt,
-            call_budget=call_budget,
-            failure_kind="validation",
-            message="empty text from LLM",
-            text="",
-            plan=plan,
-        )
-        return "empty text from LLM"
-    errors = validate_text_contains_plan(text, plan)
-    if errors:
-        msg = "; ".join(errors)
-        _log_synthetic_failure(
-            document_id=document_id,
-            model_id=model_id,
-            attempt=attempt,
-            call_budget=call_budget,
-            failure_kind="validation",
-            message=msg,
-            text=text,
-            plan=plan,
-        )
-        return msg
-    audit = audit_plan_entity_usage(text, plan)
-    if audit.used_exactly_once != audit.planned:
-        msg = f"audit mismatch: used={audit.used_exactly_once} planned={audit.planned}"
-        _log_synthetic_failure(
-            document_id=document_id,
-            model_id=model_id,
-            attempt=attempt,
-            call_budget=call_budget,
-            failure_kind="validation",
-            message=msg,
-            text=text,
-            plan=plan,
-            audit=audit,
-        )
-        return msg
-    return None
+    issues = collect_validation_issues(text, plan, min_chars=min_chars, max_chars=max_chars)
+    if not issues:
+        return None
+    msg = "; ".join(issues)
+    audit = audit_plan_entity_usage(text, plan) if text else None
+    _log_synthetic_failure(
+        document_id=document_id,
+        model_id=model_id,
+        attempt=attempt,
+        call_budget=call_budget,
+        failure_kind="validation",
+        message=msg,
+        text=text,
+        plan=plan,
+        audit=audit,
+        agent_mode=agent_mode,
+        document_type=document_type,
+    )
+    return msg
 
 
 _FILLER_SENTENCES = (
@@ -221,18 +241,6 @@ _FILLER_SENTENCES = (
     "We release code and checkpoints for reproducibility.",
     "Limitations include domain shift and label noise in weak supervision.",
 )
-
-_DEFAULT_SYNTHETIC_SYSTEM = """You generate short documents for NER benchmark gold data.
-
-Rules:
-- Follow the domain style and length limits given in the user message.
-- Put the full document in the JSON "text" field.
-- Include EVERY required entity surface EXACTLY once in "text", character-for-character.
-- Do not alter spelling, punctuation, or spacing of required surfaces.
-- Do not add extra named entities beyond the required list.
-- Respond with a single JSON object only: {"text": "<full document text>"}
-- No markdown fences and no text outside the JSON object.
-"""
 
 _PLACEHOLDER_RE = re.compile(r"\{e(\d+)\}")
 
@@ -316,26 +324,29 @@ def assemble_mock_llm_text(plan: list[PlannedEntity], config: SyntheticConfig) -
     return assemble_procedural_text(plan, config, rng)
 
 
+def _format_entity_list(plan: list[PlannedEntity]) -> str:
+    return "\n".join(f"- [{ent.label}] {ent.surface}" for ent in plan)
+
+
 def build_synthetic_user_prompt(
     plan: list[PlannedEntity],
     *,
-    domain: str,
-    min_chars: int,
-    max_chars: int,
+    config: SyntheticConfig,
+    document_type: str,
+    style_description: str,
 ) -> str:
-    """User prompt with domain, length, and required verbatim entity surfaces."""
-    lines = [
-        "Write one document for the benchmark.",
-        f"Domain style: {domain}",
-        f"Target length: {min_chars}-{max_chars} characters.",
-        (
-            "Required entities (each surface must appear exactly once in the "
-            'JSON "text" field, verbatim):'
-        ),
-    ]
-    for ent in plan:
-        lines.append(f"- [{ent.label}] {ent.surface}")
-    return "\n".join(lines)
+    """Render the initial user prompt from config template."""
+    min_chars = config.text_length.min_chars
+    max_chars = config.text_length.max_chars
+    return render_template(
+        config.llm.user_prompt,
+        document_type=document_type,
+        domain=document_type,
+        style_description=style_description,
+        min_chars=min_chars,
+        max_chars=max_chars,
+        entity_list=_format_entity_list(plan),
+    )
 
 
 def count_surface_occurrences(text: str, surface: str) -> int:
@@ -414,6 +425,8 @@ def generate_text_with_llm(
     on_call_elapsed: Callable[[int, float, str], None] | None = None,
     request_delay_seconds: float = 0.0,
     document_id: str | None = None,
+    document_type: str | None = None,
+    style_description: str | None = None,
 ) -> str:
     """Request prose from an LLM (or mock) embedding all planned entities."""
     if mock:
@@ -422,18 +435,20 @@ def generate_text_with_llm(
     model_id = config.llm.model.strip()
     if not model_id:
         raise ValueError("engine=llm requires llm.model in the synthetic config file")
-    system_prompt = (
-        config.llm.system_prompt.strip()
-        if config.llm.system_prompt.strip()
-        else _DEFAULT_SYNTHETIC_SYSTEM
-    )
+    system_prompt = config.llm.system_prompt.strip()
+    if not system_prompt:
+        raise ValueError("engine=llm requires llm.system_prompt or llm.prompt_file")
+    doc_type = document_type or config.effective_document_type()
+    style = style_description or config.domain.replace("_", " ")
     chat = client or build_chat_client(settings, mock=False, model_id=model_id)
     user = build_synthetic_user_prompt(
         plan,
-        domain=config.domain,
-        min_chars=config.text_length.min_chars,
-        max_chars=config.text_length.max_chars,
+        config=config,
+        document_type=doc_type,
+        style_description=style,
     )
+    min_chars = config.text_length.min_chars
+    max_chars = config.text_length.max_chars
     last_error = "no attempts"
     last_error_kind = "provider"
     provider_failures = 0
@@ -583,6 +598,10 @@ def generate_text_with_llm(
             model_id=model_id,
             attempt=attempt,
             call_budget=call_budget,
+            min_chars=min_chars,
+            max_chars=max_chars,
+            agent_mode="stateless",
+            document_type=doc_type,
         )
         if validation_error is None:
             return text
@@ -641,13 +660,16 @@ async def generate_text_with_llm_async(
     *,
     settings: LlmGoldSettings,
     mock: bool,
-    client: AsyncChatClient,
+    client: AsyncChatClient | None = None,
     on_attempt: Callable[[int, int], None] | None = None,
     on_wait: Callable[[float, str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
     on_call_elapsed: Callable[[int, float, str], None] | None = None,
     request_delay_seconds: float = 0.0,
     document_id: str | None = None,
+    document_type: str | None = None,
+    style_description: str | None = None,
+    agent_factory: Callable[[], AgnoAgentProtocol] | None = None,
 ) -> str:
     """Async variant of :func:`generate_text_with_llm` (LLM engine only)."""
     if mock:
@@ -656,16 +678,39 @@ async def generate_text_with_llm_async(
     model_id = config.llm.model.strip()
     if not model_id:
         raise ValueError("engine=llm requires llm.model in the synthetic config file")
-    system_prompt = (
-        config.llm.system_prompt.strip()
-        if config.llm.system_prompt.strip()
-        else _DEFAULT_SYNTHETIC_SYSTEM
-    )
+    doc_type = document_type or config.effective_document_type()
+    style = style_description or config.domain.replace("_", " ")
+    min_chars = config.text_length.min_chars
+    max_chars = config.text_length.max_chars
+
+    if config.llm.agent_mode == "per_doc":
+        from ner_gold_generator.synthetic_agno import generate_text_with_agno_async
+
+        if not document_id:
+            raise ValueError("document_id is required for llm.agent_mode=per_doc")
+        return await generate_text_with_agno_async(
+            plan,
+            config,
+            settings=settings,
+            document_id=document_id,
+            document_type=doc_type,
+            style_description=style,
+            agent_factory=agent_factory,
+            on_attempt=on_attempt,
+            on_wait=on_wait,
+            on_status=on_status,
+        )
+
+    if client is None:
+        raise ValueError("AsyncChatClient is required for llm.agent_mode=stateless")
+    system_prompt = config.llm.system_prompt.strip()
+    if not system_prompt:
+        raise ValueError("engine=llm requires llm.system_prompt or llm.prompt_file")
     user = build_synthetic_user_prompt(
         plan,
-        domain=config.domain,
-        min_chars=config.text_length.min_chars,
-        max_chars=config.text_length.max_chars,
+        config=config,
+        document_type=doc_type,
+        style_description=style,
     )
     last_error = "no attempts"
     last_error_kind = "provider"
@@ -816,6 +861,10 @@ async def generate_text_with_llm_async(
             model_id=model_id,
             attempt=attempt,
             call_budget=call_budget,
+            min_chars=min_chars,
+            max_chars=max_chars,
+            agent_mode="stateless",
+            document_type=doc_type,
         )
         if validation_error is None:
             return text
@@ -874,11 +923,13 @@ def config_summary_for_meta(config: SyntheticConfig) -> dict:
         "num_documents": config.num_documents,
         "engine": config.engine,
         "domain": config.domain,
+        "document_type": config.effective_document_type(),
         "text_length": {
             "min_chars": config.text_length.min_chars,
             "max_chars": config.text_length.max_chars,
         },
         "llm_model": config.llm.model,
+        "llm_agent_mode": config.llm.agent_mode,
         "llm_parallelism": config.llm.parallelism,
         "llm_provider_max_attempts": config.llm.provider_max_attempts,
         "llm_validation_max_attempts": config.llm.validation_max_attempts,

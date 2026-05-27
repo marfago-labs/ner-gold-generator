@@ -1,0 +1,17 @@
+id: transcript
+style_description: >
+  A spoken transcript with speaker labels (e.g. "Host:", "Guest:"). Natural
+  dialogue, fillers allowed, timestamps optional. Multiple short turns.
+templates:
+  - "Host: Welcome to the show. Today we discuss {e0} and {e1}.\nGuest: Thanks. We ran {e2} on {e3} in {e4}."
+lexicon:
+  person: ["Host", "Guest", "Dr. Lee", "Chris"]
+  organization: ["Acme Corp", "Tech Weekly"]
+label_weights:
+  person: 0.25
+  organization: 0.15
+  date: 0.1
+  number: 0.1
+text_length:
+  min_chars: 400
+  max_chars: 1500

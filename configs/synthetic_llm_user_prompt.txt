@@ -1,0 +1,8 @@
+Write one document for the benchmark.
+
+Document type: {document_type}
+Style: {style_description}
+Target length: {min_chars}-{max_chars} characters.
+
+Required entities (each surface must appear exactly once in the JSON "text" field, verbatim):
+{entity_list}

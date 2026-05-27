@@ -1,0 +1,2 @@
+Annotate entities. Labels: {labels}
+Respond: {{"entities": [{{"text": "x", "label": "model"}}]}}

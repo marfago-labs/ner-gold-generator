@@ -1,0 +1,7 @@
+Your previous draft did not meet the constraints:
+
+{issues}
+
+Target length: {min_chars}-{max_chars} characters.
+
+Please rewrite the full document in the JSON "text" field, fixing these issues while keeping the same meaning as much as possible. Include every required entity surface exactly once, character-for-character.

@@ -1,0 +1,6 @@
+Write one document.
+Type: {document_type}
+Style: {style_description}
+Length: {min_chars}-{max_chars} chars.
+Entities:
+{entity_list}

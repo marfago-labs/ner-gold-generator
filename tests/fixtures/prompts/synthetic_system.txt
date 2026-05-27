@@ -1,0 +1,3 @@
+You generate documents for NER benchmark gold data.
+Respond with a single JSON object only: {{"text": "<full document text>"}}
+Include EVERY required entity surface EXACTLY once in "text", character-for-character.

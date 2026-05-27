@@ -1,0 +1,20 @@
+id: scientific_abstract
+style_description: >
+  A formal scientific abstract in third person. Use precise technical language,
+  one coherent paragraph or two short paragraphs. Suitable for ML/NLP papers.
+templates:
+  - "We propose {e0} and evaluate it on {e1}, achieving {e2} on the {e3} benchmark."
+  - "Compared with {e0}, our approach on {e1} improves {e2} as measured by {e3}."
+lexicon:
+  model: ["Transformer", "BERT", "GPT-3", "ResNet", "ViT"]
+  dataset: ["ImageNet", "CIFAR-10", "GLUE", "SQuAD"]
+  organization: ["OpenAI", "Google", "Meta", "Microsoft"]
+label_weights:
+  model: 0.2
+  dataset: 0.15
+  metric: 0.15
+  method: 0.1
+  organization: 0.1
+text_length:
+  min_chars: 200
+  max_chars: 900

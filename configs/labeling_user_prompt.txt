@@ -1,0 +1,7 @@
+Extract named entities from the text below.
+
+Allowed labels: {labels}
+
+---TEXT---
+{text}
+---END---

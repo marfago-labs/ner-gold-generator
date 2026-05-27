@@ -15,8 +15,18 @@ Copy `.env.example` to `.env` and edit locally. Do not commit secrets — CI and
 | `LLM_GOLD_MIN_VOTES` | `0` | Min agreeing passes (`0` = auto majority: ⌊N/2⌋+1) |
 | `LLM_GOLD_TEMPERATURE` | `0.4` | Sampling temperature per pass |
 | `MOCK_LLM` | `false` | If true, never call the API (same as `--mock`) |
+| `LLM_GOLD_SYSTEM_PROMPT_FILE` | *(empty → `configs/labeling_system_prompt.txt`)* | Path to labeling system prompt |
+| `LLM_GOLD_USER_PROMPT_FILE` | *(empty → `configs/labeling_user_prompt.txt`)* | Path to labeling user prompt template |
 
 CLI flags `--samples`, `--min-votes`, and `--mock` override behavior for that run without changing env defaults for samples/votes/mock.
+
+## Synthetic / build logging
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NER_GOLD_LOG_FILE` | `gold.log` | File for LLM prompt/response and synthetic failure logs |
+| `NER_GOLD_LOG_LEVEL` | `INFO` | `DEBUG` for full Agno/OpenRouter prompt bodies; `WARNING` for failures only |
+| `NER_GOLD_LOG_STDERR` | `0` | Set `1` to echo log lines to stderr |
 
 ## Input path overrides
 

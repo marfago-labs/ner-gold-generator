@@ -52,7 +52,10 @@ For live OpenRouter requests, each LLM call is logged to `gold.log` by default (
 Logger controls (optional):
 
 - `NER_GOLD_LOG_FILE` (default: `gold.log`) — where structured debug logs are written.
+- `NER_GOLD_LOG_LEVEL` (default: `INFO`) — `DEBUG` logs full prompts/responses; `WARNING` keeps failures only.
 - `NER_GOLD_LOG_STDERR` (default: `0`) — set to `1` to mirror debug logs to stderr.
+
+Synthetic `engine: llm` with `agent_mode: per_doc` (default) uses **Agno** per-document sessions; install with `uv sync --extra llm` (includes `agno`, `sqlalchemy` for session storage, and the OpenAI client). See [synthetic.md](synthetic.md) for prompt files and document profiles.
 
 ## Exit codes
 

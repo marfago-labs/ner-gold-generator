@@ -299,6 +299,14 @@ def test_ensure_arxiv_argv_maps_arxiv_dir() -> None:
     assert "--source" in argv
 
 
+def test_resolve_input_path_arxiv_legacy_env(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ARXIV_RAW_DIR", str(tmp_path))
+    monkeypatch.delenv("ARXIV_INPUT_DIR", raising=False)
+    assert build_gold_mod.resolve_input_path("arxiv", None) == tmp_path
+
+
 def test_resolve_input_path_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("YOUTUBE_INPUT_DIR", str(tmp_path))
     assert build_gold_mod.resolve_input_path("youtube", None) == tmp_path
@@ -404,13 +412,14 @@ def test_main_verbose_prints_step_logs(
 ) -> None:
     monkeypatch.setenv("NER_GOLD_LOG_STDERR", "1")
     monkeypatch.setenv("NER_GOLD_LOG_FILE", "")
-    import ner_gold_generator.llm_client as llm_client_mod
     import ner_gold_generator.progress as progress_mod
 
     progress_mod._LOGGER.handlers.clear()
     progress_mod._LOGGER = progress_mod.get_logger(progress_mod.__name__)
-    llm_client_mod._LOGGER.handlers.clear()
-    llm_client_mod._LOGGER = llm_client_mod.get_logger(llm_client_mod.__name__)
+    import ner_gold_generator.llm_logging as llm_logging_mod
+
+    llm_logging_mod._LOGGER.handlers.clear()
+    llm_logging_mod._LOGGER = llm_logging_mod.get_logger(llm_logging_mod.__name__)
     smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.json"
     out = tmp_path / "gold.jsonl"
     code = build_gold_mod.main(

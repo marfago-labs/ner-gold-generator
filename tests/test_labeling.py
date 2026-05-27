@@ -182,10 +182,10 @@ def test_build_chat_client_openrouter(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_openrouter_client_complete_json(capsys, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("NER_GOLD_LOG_STDERR", "1")
     monkeypatch.setenv("NER_GOLD_LOG_FILE", "")
-    import ner_gold_generator.llm_client as llm_client_mod
+    import ner_gold_generator.llm_logging as llm_logging_mod
 
-    llm_client_mod._LOGGER.handlers.clear()
-    llm_client_mod._LOGGER = llm_client_mod.get_logger(llm_client_mod.__name__)
+    llm_logging_mod._LOGGER.handlers.clear()
+    llm_logging_mod._LOGGER = llm_logging_mod.get_logger(llm_logging_mod.__name__)
     pytest.importorskip("openai")
     mock_response = MagicMock()
     mock_response.choices = [MagicMock(message=MagicMock(content='{"entities": []}'))]
@@ -201,7 +201,8 @@ def test_openrouter_client_complete_json(capsys, monkeypatch: pytest.MonkeyPatch
         )
     assert out == {"entities": []}
     err = capsys.readouterr().err
-    assert "--- LLM prompt (m, temperature=0.1, attempt 2/3) ---" in err
+    assert "LLM prompt (m, temperature=0.1" in err
+    assert "attempt 2/3" in err
     assert "SYSTEM:\ns\nUSER:\nu\n" in err
     assert "--- end LLM prompt ---" in err
     assert "--- LLM response (m, attempt 2/3) ---" in err
