@@ -15,10 +15,14 @@ Copy `.env.example` to `.env` and edit locally. Do not commit secrets — CI and
 | `LLM_GOLD_MIN_VOTES` | `0` | Min agreeing passes (`0` = auto majority: ⌊N/2⌋+1) |
 | `LLM_GOLD_TEMPERATURE` | `0.4` | Sampling temperature per pass |
 | `MOCK_LLM` | `false` | If true, never call the API (same as `--mock`) |
-| `LLM_GOLD_SYSTEM_PROMPT_FILE` | *(empty → `configs/labeling_system_prompt.txt`)* | Path to labeling system prompt |
-| `LLM_GOLD_USER_PROMPT_FILE` | *(empty → `configs/labeling_user_prompt.txt`)* | Path to labeling user prompt template |
+| `LLM_GOLD_SYSTEM_PROMPT_FILE` | *(empty → `configs/prompts/labeling_system_prompt.txt`)* | Path to labeling system prompt |
+| `LLM_GOLD_USER_PROMPT_FILE` | *(empty → `configs/prompts/labeling_user_prompt.txt`)* | Path to labeling user prompt template |
 
 CLI flags `--samples`, `--min-votes`, and `--mock` override behavior for that run without changing env defaults for samples/votes/mock.
+
+When `LLM_GOLD_*_PROMPT_FILE` is unset, prompts load from **`configs/prompts/labeling_system_prompt.txt`** and **`configs/prompts/labeling_user_prompt.txt`** (repo root relative). Override with absolute paths or paths relative to the repo root.
+
+Synthetic `engine: llm` uses a separate trio under the same directory (`synthetic_llm_*.txt`), referenced from each `configs/synthetic_*.json` via `llm.prompt_file`, `user_prompt_file`, and `feedback_prompt_file` (paths relative to that JSON file). See [synthetic.md](synthetic.md).
 
 ## Synthetic / build logging
 

@@ -36,6 +36,30 @@ Use `--mock` only for CI/tests; it skips the API and uses template assembly even
 
 `engine: llm` requires `OPENROUTER_API_KEY` and a valid `llm.model` — missing config or API errors exit with a clear message (no silent fallback to templates).
 
+## Config directory layout
+
+Paths in synthetic JSON are resolved **relative to the config file** (usually `configs/`):
+
+```
+configs/
+  synthetic_smoke.json
+  synthetic_llm.json
+  synthetic_mixed.json
+  prompts/                          # LLM templates (not inlined in Python)
+    synthetic_llm_system_prompt.txt
+    synthetic_llm_user_prompt.txt
+    synthetic_llm_feedback_prompt.txt
+    labeling_system_prompt.txt      # used by build-gold --mode llm (not synthetic)
+    labeling_user_prompt.txt
+  document_profiles/                # per-genre YAML overrides
+    scientific_abstract.yaml
+    news_article.yaml
+    blog_post.yaml
+    transcript.yaml
+```
+
+At load time, `load_synthetic_config` reads `llm.prompt_file`, `user_prompt_file`, and `feedback_prompt_file` from disk and stores the text in `llm.system_prompt`, `user_prompt`, and `feedback_prompt`.
+
 ## Config file (YAML or JSON)
 
 | Field | Description |
@@ -60,7 +84,7 @@ Use `--mock` only for CI/tests; it skips the API and uses template assembly even
 | `llm.parallelism` | Number of concurrent synthetic LLM document calls (default `3`; use `1` for sequential, no thread pool) |
 | `llm.agent_mode` | `per_doc` (default): Agno session per document with in-session feedback turns; `stateless`: one-shot OpenRouter JSON loop per attempt |
 | `llm.agno_db_path` | SQLite path for Agno session history (`:memory:` default; one DB per document build) |
-| `llm.prompt_file` | System prompt text file (relative to config dir or absolute) |
+| `llm.prompt_file` | System prompt under `configs/prompts/` (relative to the synthetic config file or absolute) |
 | `llm.user_prompt_file` | User prompt template for the first turn (`{document_type}`, `{style_description}`, `{entity_list}`, `{min_chars}`, `{max_chars}`, …) |
 | `llm.feedback_prompt_file` | Validation feedback template for retry turns (`{issues}`, `{min_chars}`, `{max_chars}`) |
 | `llm.system_prompt` | Inline system prompt (only when `prompt_file` is not set; tests may use inline strings) |
@@ -68,7 +92,25 @@ Use `--mock` only for CI/tests; it skips the API and uses template assembly even
 | `document_types` | Weighted mix, e.g. `[{"type": "news_article", "weight": 0.5}, {"type": "blog_post", "weight": 0.5}]` |
 | `document_profiles_dir` | Directory of YAML/JSON profiles (default `document_profiles` next to the config) |
 
-`engine: llm` requires all three prompt files (`prompt_file`, `user_prompt_file`, `feedback_prompt_file`) or inline equivalents in tests.
+`engine: llm` requires all three prompt files under `configs/prompts/` (via `prompt_file`, `user_prompt_file`, `feedback_prompt_file`) or inline equivalents in tests.
+
+### Defaults and sparse configs
+
+Omitted top-level fields use **code defaults** from `SyntheticConfig` (`ner_gold_generator.synthetic_config`), for example:
+
+| Field | Default when omitted |
+|-------|----------------------|
+| `seed` | `42` |
+| `engine` | `procedural` |
+| `text_length` | `min_chars=200`, `max_chars=800` |
+| `label_weights` | Built-in label mix (normalized at sampling time) |
+| `lexicon` / `templates` | Built-in scientific-style lists and sentence templates |
+| `llm.temperature` | `0.4` |
+| `llm.agent_mode` | `per_doc` |
+| `llm.parallelism` | `3` |
+| `document_profiles_dir` | `document_profiles` (next to the config file) |
+
+A minimal LLM config such as `configs/synthetic_mixed.json` only sets `seed`, `num_documents`, `engine`, `document_types`, `entities_per_document`, and `llm.*` prompt paths. Everything else above still applies until a **document profile** overrides it (see below).
 
 ### Document profiles (multi-genre)
 
@@ -82,6 +124,20 @@ Profiles under `configs/document_profiles/` override style, templates, lexicon, 
 | `transcript` | Spoken/interview style |
 
 Example configs: `configs/synthetic_news.json`, `synthetic_blog.json`, `synthetic_transcript.json`, `synthetic_mixed.json`. Each output row sets `synthetic_meta.document_type` to the profile used for that document.
+
+**Merge rules** (`merge_config_for_profile`): for each document, the sampled profile is merged into the base JSON config:
+
+| Setting | Precedence |
+|---------|------------|
+| `text_length` | Profile value if present, else base JSON / defaults |
+| `label_weights` | Profile if non-empty, else base |
+| `lexicon` | Base lexicon, then profile keys merged on top |
+| `templates` | Profile templates if any, else base; procedural engine uses these |
+| `style_description` | From profile; passed to the LLM user prompt as `{style_description}` |
+
+For **`engine: llm`**, profile `templates` are **not** sent to the model; the LLM writes prose from `style_description` and the shared prompts in `configs/prompts/`. Length and entity sampling still follow the merged config (e.g. `news_article` sets 300–1200 chars while the global default is 200–800).
+
+**Example — `synthetic_mixed.json`:** 30 documents with a 40/30/30 mix of `news_article`, `blog_post`, and `transcript`; five entities per document (`entities_per_document.fixed: 5`); Agno `per_doc` sessions; shared system/user/feedback prompts. No `text_length` in the JSON — each document uses the profile’s bounds when the profile defines `text_length` (news: 300–1200), otherwise 200–800.
 
 ### Logging (`gold.log`)
 
@@ -100,6 +156,10 @@ Useful greps: `Agno prompt`, `synthetic session`, `synthetic failure`, `prompt_k
 | `NER_GOLD_LOG_STDERR` | `0` | Set `1` to mirror logs to stderr |
 
 **Stuck on `LLM 2/3`?** The bar only updates between steps. During `calling OpenRouter…` the client is waiting on the API (reasoning models can take minutes). Prefer instruct/chat `:free` models over `*:reasoning:free`, or use `engine: procedural` for offline runs.
+
+### Dataset quality (lexical diversity)
+
+After a successful `build-gold` run, the **statistics** block on stderr includes **distinct-1** and **distinct-2** scores (per-document mean/min/max and corpus-level). These measure lexical variety in accepted documents only; they are **informational** and do not fail the build. Lower corpus distinct-n is normal when many documents share function words; compare runs with the same length and genre mix.
 
 Concurrency safety notes:
 

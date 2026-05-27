@@ -42,7 +42,7 @@ uv pip install --force-reinstall jiter
 | `--quiet` | false | Suppress progress on stderr |
 | `--verbose` | false | Print detailed step-by-step logs on stderr |
 
-Progress goes to **stderr** via [Rich](https://github.com/Textualize/rich) on interactive terminals (stable bar + skip lines that do not overwrite each other). Non-TTY runs (pipes, tests) use plain ASCII lines. Synthetic LLM runs also show attempt `1/3` while waiting on OpenRouter. Use `--quiet` to disable stderr progress/logging. The final `Wrote …` line goes to **stdout**; a **statistics** block (counts, label histogram, synthetic entity-plan totals, elapsed time and throughput) is printed to **stderr** after a successful run (and after Ctrl+C when partial output was written).
+Progress goes to **stderr** via [Rich](https://github.com/Textualize/rich) on interactive terminals (stable bar + skip lines that do not overwrite each other). Non-TTY runs (pipes, tests) use plain ASCII lines. Synthetic LLM runs also show attempt `1/3` while waiting on OpenRouter. Use `--quiet` to disable stderr progress/logging. The final `Wrote …` line goes to **stdout**; a **statistics** block (counts, label histogram, **lexical diversity** distinct-1/2 quality numbers, synthetic entity-plan totals, elapsed time and throughput) is printed to **stderr** after a successful run (and after Ctrl+C when partial output was written).
 
 For live OpenRouter requests, each LLM call is logged to `gold.log` by default (including retries), with structured fields (timestamp, level, logger, message):
 

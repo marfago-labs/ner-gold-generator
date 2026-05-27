@@ -1,4 +1,27 @@
-"""Load and validate synthetic gold generation configuration (YAML/JSON)."""
+"""Load and validate synthetic gold generation configuration (YAML/JSON).
+
+Repository layout (relative to the package root)::
+
+    configs/
+      synthetic_llm.json          # example batch spec
+      prompts/                    # LLM prompt templates (not inlined in Python)
+        synthetic_llm_system_prompt.txt
+        synthetic_llm_user_prompt.txt
+        synthetic_llm_feedback_prompt.txt
+        labeling_system_prompt.txt
+        labeling_user_prompt.txt
+      document_profiles/          # per-genre YAML/JSON overrides
+
+Synthetic JSON files reference prompts with paths relative to the config file,
+for example ``"prompt_file": "prompts/synthetic_llm_system_prompt.txt"``.
+:func:`load_synthetic_config` reads those files and inlines the text into
+:class:`LlmSyntheticConfig` before validation.
+
+Omitted JSON fields receive code defaults (see :class:`SyntheticConfig` and
+:class:`TextLengthConfig`). When ``document_types`` or ``document_type`` is set,
+:func:`ner_gold_generator.document_profiles.merge_config_for_profile` may
+override ``text_length``, lexicon, ``label_weights``, and templates per document.
+"""
 
 from __future__ import annotations
 
@@ -18,12 +41,16 @@ class DocumentTypeWeight:
 
 @dataclass(frozen=True, slots=True)
 class TextLengthConfig:
+    """Inclusive character bounds enforced on LLM output and in prompts."""
+
     min_chars: int = 200
     max_chars: int = 800
 
 
 @dataclass(frozen=True, slots=True)
 class EntitiesPerDocumentConfig:
+    """How many planned entities to sample per document."""
+
     distribution: str = "uniform"
     min_count: int = 3
     max_count: int = 8
@@ -46,6 +73,14 @@ class GeneratorConfig:
 
 @dataclass(frozen=True, slots=True)
 class LlmSyntheticConfig:
+    """OpenRouter / Agno settings for ``engine: llm``.
+
+    Prompt prose lives under ``configs/prompts/`` and is loaded via
+    ``prompt_file``, ``user_prompt_file``, and ``feedback_prompt_file`` (paths
+    relative to the synthetic config file). After loading, the file contents
+    are available as ``system_prompt``, ``user_prompt``, and ``feedback_prompt``.
+    """
+
     model: str = ""
     max_attempts: int = 3
     provider_max_attempts: int = 3
@@ -57,16 +92,22 @@ class LlmSyntheticConfig:
     agent_mode: str = "per_doc"
     agno_db_path: str = ""
     system_prompt: str = ""
-    prompt_file: str = ""
-    user_prompt: str = ""
-    user_prompt_file: str = ""
-    feedback_prompt: str = ""
-    feedback_prompt_file: str = ""
+    prompt_file: str = ""  # e.g. prompts/synthetic_llm_system_prompt.txt
+    user_prompt: str = ""  # filled from user_prompt_file at load time
+    user_prompt_file: str = ""  # e.g. prompts/synthetic_llm_user_prompt.txt
+    feedback_prompt: str = ""  # filled from feedback_prompt_file at load time
+    feedback_prompt_file: str = ""  # e.g. prompts/synthetic_llm_feedback_prompt.txt
 
 
 @dataclass(frozen=True, slots=True)
 class SyntheticConfig:
-    """Full synthetic dataset specification."""
+    """Full synthetic dataset specification.
+
+    Top-level JSON may omit many fields; defaults apply (for example
+    ``text_length`` 200–800 chars, built-in ``label_weights`` when empty).
+    Per-document genre profiles can override length and sampling; see
+    :mod:`ner_gold_generator.document_profiles`.
+    """
 
     seed: int = 42
     num_documents: int = 10
@@ -196,6 +237,7 @@ def _parse_llm(raw: dict[str, Any]) -> LlmSyntheticConfig:
 
 
 def _resolve_prompt_path(path_str: str, config_path: Path) -> Path:
+    """Resolve a prompt path relative to the synthetic config file directory."""
     prompt_path = Path(path_str)
     if not prompt_path.is_absolute():
         prompt_path = (config_path.parent / prompt_path).resolve()
@@ -203,6 +245,7 @@ def _resolve_prompt_path(path_str: str, config_path: Path) -> Path:
 
 
 def _load_prompt_file(path_str: str, config_path: Path, label: str) -> str:
+    """Read a prompt template from disk (``label`` is ``system`` / ``user`` / ``feedback``)."""
     if not path_str.strip():
         return ""
     prompt_path = _resolve_prompt_path(path_str, config_path)
@@ -240,7 +283,13 @@ def validate_synthetic_config(config: SyntheticConfig) -> None:
 
 
 def load_synthetic_config(path: Path) -> SyntheticConfig:
-    """Load synthetic config from YAML or JSON."""
+    """Load synthetic config from YAML or JSON and inline prompt files.
+
+    Resolves ``llm.prompt_file``, ``llm.user_prompt_file``, and
+    ``llm.feedback_prompt_file`` relative to *path*'s parent directory (typically
+    ``configs/prompts/...``). Raises :class:`FileNotFoundError` when a referenced
+    prompt file is missing.
+    """
     if not path.is_file():
         raise FileNotFoundError(f"Synthetic config not found: {path}")
     suffix = path.suffix.lower()
@@ -290,7 +339,10 @@ def load_synthetic_config(path: Path) -> SyntheticConfig:
 
 
 def parse_synthetic_config_dict(raw: dict[str, Any]) -> SyntheticConfig:
-    """Parse a config mapping into :class:`SyntheticConfig`."""
+    """Parse a config mapping into :class:`SyntheticConfig` without reading prompt files.
+
+    Use :func:`load_synthetic_config` for on-disk configs so prompt paths are loaded.
+    """
     text_length = _parse_text_length(raw.get("text_length", {}) or {})
     epd = _parse_entities_per_document(raw.get("entities_per_document", {}) or {})
     gens_raw = raw.get("generators", {}) or {}

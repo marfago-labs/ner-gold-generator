@@ -1,4 +1,11 @@
-"""Multi-sample LLM entity labeling with majority consensus."""
+"""Multi-sample LLM entity labeling with majority consensus.
+
+Prompt templates default to ``configs/prompts/labeling_system_prompt.txt`` and
+``configs/prompts/labeling_user_prompt.txt``. Override paths with
+``LLM_GOLD_SYSTEM_PROMPT_FILE`` / ``LLM_GOLD_USER_PROMPT_FILE`` (see
+``docs/configuration.md``). Synthetic text generation uses separate files
+under the same directory; see :mod:`ner_gold_generator.synthetic_config`.
+"""
 
 from __future__ import annotations
 
@@ -85,6 +92,7 @@ class LlmGoldSettings(BaseSettings):
 def _resolve_labeling_prompt_path(
     settings: LlmGoldSettings, configured: str, default_name: str
 ) -> Path:
+    """Resolve a labeling prompt path (env override or ``configs/<default_name>``)."""
     if configured.strip():
         path = Path(configured)
         if not path.is_absolute():
@@ -102,7 +110,7 @@ def labeling_system_prompt(settings: LlmGoldSettings | None, *, labels: tuple[st
     """Render the labeling system prompt from config file."""
     cfg = settings or LlmGoldSettings()
     path = _resolve_labeling_prompt_path(
-        cfg, cfg.llm_gold_system_prompt_file, "labeling_system_prompt.txt"
+        cfg, cfg.llm_gold_system_prompt_file, "prompts/labeling_system_prompt.txt"
     )
     if not path.is_file():
         raise FileNotFoundError(f"Labeling system prompt not found: {path}")
@@ -116,7 +124,7 @@ def labeling_user_prompt(
     """Render the labeling user prompt from config file."""
     cfg = settings or LlmGoldSettings()
     path = _resolve_labeling_prompt_path(
-        cfg, cfg.llm_gold_user_prompt_file, "labeling_user_prompt.txt"
+        cfg, cfg.llm_gold_user_prompt_file, "prompts/labeling_user_prompt.txt"
     )
     if not path.is_file():
         raise FileNotFoundError(f"Labeling user prompt not found: {path}")

@@ -24,6 +24,11 @@ python -m pydoc ner_gold_generator
 | `ner_gold_generator.types` | `ProposedEntity`, `ValidatedEntity` |
 | `ner_gold_generator.progress` | stderr progress helper |
 | `ner_gold_generator.env` | `load_project_env` |
+| `ner_gold_generator.synthetic_config` | `SyntheticConfig`, `load_synthetic_config` |
+| `ner_gold_generator.document_profiles` | Genre profiles and `merge_config_for_profile` |
+| `ner_gold_generator.synthetic` | `build_examples_from_config_path` |
+| `ner_gold_generator.build_stats` | `summarize_gold_build` (includes lexical diversity) |
+| `ner_gold_generator.lexical_diversity` | distinct-1/2 reporting helpers |
 
 ## Common calls
 

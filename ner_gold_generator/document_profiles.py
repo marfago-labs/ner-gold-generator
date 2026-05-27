@@ -1,4 +1,14 @@
-"""Load and merge per-genre document profiles for synthetic generation."""
+"""Load and merge per-genre document profiles for synthetic generation.
+
+Profiles live under ``configs/document_profiles/`` (or ``document_profiles_dir``
+relative to the synthetic JSON file). Each YAML/JSON file defines
+``style_description``, optional ``templates``, ``lexicon``, ``label_weights``,
+and ``text_length`` overrides.
+
+:func:`merge_config_for_profile` applies those overrides per document before
+planning entities and calling the LLM. See ``docs/synthetic.md`` for merge
+precedence and sparse-config defaults.
+"""
 
 from __future__ import annotations
 
@@ -138,7 +148,13 @@ def merge_config_for_profile(
     base: SyntheticConfig,
     profile: DocumentProfile,
 ) -> SyntheticConfig:
-    """Return a copy of *base* with profile overrides applied."""
+    """Return a copy of *base* with profile overrides applied.
+
+    Lexicon keys are merged (base, then profile). ``text_length``,
+    ``label_weights``, and ``templates`` use the profile when set; otherwise
+    the base config (or built-in defaults) remains. ``domain`` and
+    ``document_type`` are set to ``profile.profile_id`` for logging and prompts.
+    """
     lexicon = dict(_DEFAULT_LEXICON)
     lexicon.update(base.lexicon)
     lexicon.update(profile.lexicon)

@@ -5,6 +5,10 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
+from ner_gold_generator.lexical_diversity import (
+    compute_lexical_diversity,
+    format_lexical_diversity_lines,
+)
 from ner_gold_generator.progress import format_skip_error
 
 
@@ -50,7 +54,9 @@ def summarize_gold_build(
         skipped_documents: Synthetic documents skipped after LLM retries.
 
     Returns:
-        Lines without trailing newlines (caller prints them).
+        Lines without trailing newlines (caller prints them). When *examples*
+        contain ``text`` fields, appends lexical diversity (distinct-1/2) lines
+        from :mod:`ner_gold_generator.lexical_diversity` (report-only).
     """
     n_docs = len(examples)
     if n_docs == 0:
@@ -106,6 +112,10 @@ def summarize_gold_build(
             lines.append(f"    - {doc_id}: {err}")
         if len(skipped_documents) > 5:
             lines.append(f"    ... and {len(skipped_documents) - 5} more")
+
+    diversity = compute_lexical_diversity(examples)
+    if diversity is not None:
+        lines.extend(format_lexical_diversity_lines(diversity))
 
     if source == "synthetic":
         lines.extend(_synthetic_stats(examples))

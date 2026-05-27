@@ -26,8 +26,8 @@
     "timeout_seconds": 90,
     "request_delay_seconds": 2,
     "parallelism": 50,
-    "prompt_file": "synthetic_llm_system_prompt.txt",
-    "user_prompt_file": "synthetic_llm_user_prompt.txt",
-    "feedback_prompt_file": "synthetic_llm_feedback_prompt.txt"
+    "prompt_file": "prompts/synthetic_llm_system_prompt.txt",
+    "user_prompt_file": "prompts/synthetic_llm_user_prompt.txt",
+    "feedback_prompt_file": "prompts/synthetic_llm_feedback_prompt.txt"
   }
 }

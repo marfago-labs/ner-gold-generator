@@ -1,4 +1,9 @@
-"""Per-document Agno agent sessions for synthetic LLM text generation."""
+"""Per-document Agno agent sessions for synthetic LLM text generation.
+
+Uses prompts loaded by :mod:`ner_gold_generator.synthetic_config` (under
+``configs/prompts/``). Validation failures trigger feedback turns using
+``feedback_prompt`` before the document is skipped.
+"""
 
 from __future__ import annotations
 
@@ -7,7 +12,10 @@ import json
 import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import NoReturn, Protocol
+from typing import TYPE_CHECKING, NoReturn, Protocol, cast
+
+if TYPE_CHECKING:
+    from agno.db.sqlite import SqliteDb
 
 from pydantic import BaseModel, Field
 
@@ -131,7 +139,7 @@ def build_agno_sqlite_db(
     config: SyntheticConfig,
     *,
     document_id: str | None = None,
-) -> object:
+) -> SqliteDb:
     """Return an Agno :class:`SqliteDb` for one synthetic document session.
 
     Agno's ``SqliteDb(db_file=...)`` treats paths literally and breaks on ``:memory:``
@@ -182,7 +190,7 @@ def create_synthetic_agent(
         markdown=False,
         reasoning=False,
     )
-    return agent
+    return cast(AgnoAgentProtocol, agent)  # type: ignore[return-value]
 
 
 async def _run_agent_async(
