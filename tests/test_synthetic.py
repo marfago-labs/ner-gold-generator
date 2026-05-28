@@ -46,7 +46,7 @@ from ner_gold_generator.synthetic_generators import (
 from ner_gold_generator.validate import index_unique_span, normalize_entity_label
 
 _REPO = Path(__file__).resolve().parent.parent
-_SMOKE_CONFIG = _REPO / "configs" / "synthetic_smoke.json"
+_SMOKE_CONFIG = _REPO / "configs" / "synthetic_smoke.yaml"
 
 
 def test_normalize_new_synthetic_labels() -> None:
@@ -129,6 +129,7 @@ def test_audit_plan_entity_usage_regex_counts() -> None:
     assert "GLUE" not in audit.missing
     assert audit.occurrence_counts["BERT"] == 2
     assert count_surface_occurrences(text, "GLUE") == 1
+    assert count_surface_occurrences(text, "") == 0
     assert validate_text_contains_plan(text, [PlannedEntity("GLUE", "dataset")]) == []
     assert "BERT" in str(validate_text_contains_plan(text, plan))
 
@@ -303,9 +304,13 @@ def test_generate_text_with_llm_request_delay_between_attempts(
     )
     plan = [PlannedEntity("BERT", "model")]
     sleeps: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
     monkeypatch.setattr(
-        "ner_gold_generator.synthetic_compose.time.sleep",
-        lambda s: sleeps.append(s),
+        "ner_gold_generator.synthetic_compose.asyncio.sleep",
+        fake_sleep,
     )
 
     class _BadThenGood:
@@ -806,6 +811,23 @@ def test_build_user_prompt_and_meta_json() -> None:
         style_description="News article style",
     )
     assert "news" in prompt and "X" in prompt
+
+    transcript_prompt = build_synthetic_user_prompt(
+        plan,
+        config=cfg,
+        document_type="transcript",
+        style_description="Spoken transcript",
+    )
+    assert "Transcript-specific rules" in transcript_prompt
+    assert "Host:" in transcript_prompt
+
+    spaced_transcript = build_synthetic_user_prompt(
+        plan,
+        config=cfg,
+        document_type=" Transcript ",
+        style_description="Spoken transcript",
+    )
+    assert "Transcript-specific rules" in spaced_transcript
     meta_cfg = parse_synthetic_config_dict({})
     assert '"seed": 42' in config_summary_json(meta_cfg)
 

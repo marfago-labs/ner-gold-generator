@@ -1,0 +1,55 @@
+# Blog-post LLM batch. See configs/synthetic_reference.yaml.
+
+# --- Core ---
+seed: 7
+num_documents: 15
+engine: llm
+document_type: blog_post
+# document_types:
+#   - type: blog_post
+#     weight: 1.0
+document_profiles_dir: document_profiles
+# domain: blog_post
+
+# --- Text length (profile may override) ---
+# text_length:
+#   min_chars: 400
+#   max_chars: 1500
+
+entities_per_document:
+  distribution: fixed # uniform | fixed | poisson
+  fixed: 5
+  # min: 3
+  # max: 8
+  # lambda: 6.0
+
+# --- Label mix ---
+# label_weights:
+#   person: 0.15
+#   organization: 0.15
+
+# --- Optional ---
+# lexicon:
+#   person: [Jane Doe, John Smith]
+# generators:
+#   date:
+#     formats: ["%d %b %Y"]
+# templates:
+#   - "In this post I discuss {e0} and {e1}."
+
+llm:
+  model: openai/gpt-oss-120b:free
+  agent_mode: per_doc # per_doc | stateless
+  provider_max_attempts: 2
+  validation_max_attempts: 8
+  max_restarts: 2
+  parallelism: 5
+  prompt_file: prompts/synthetic_llm_system_prompt.txt
+  user_prompt_file: prompts/synthetic_llm_user_prompt.txt
+  feedback_prompt_file: prompts/synthetic_llm_feedback_prompt.txt
+  # max_attempts: 3
+  # temperature: 0.4
+  # timeout_seconds: 120
+  # request_delay_seconds: 0
+  # document_log_dir: logs_tmp
+  # agno_db_path: ""

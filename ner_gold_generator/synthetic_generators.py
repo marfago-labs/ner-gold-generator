@@ -1,4 +1,11 @@
-"""Deterministic generators for structured synthetic entity surfaces."""
+"""Deterministic generators for structured synthetic entity surfaces.
+
+Plans labels and literal strings from ``SyntheticConfig`` (lexicon, generators,
+``label_weights``) and a per-document seed. Used by :mod:`ner_gold_generator.synthetic`
+before text assembly or LLM prompting.
+
+See :func:`plan_entities_for_document` and :class:`PlannedEntity`.
+"""
 
 from __future__ import annotations
 

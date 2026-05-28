@@ -22,7 +22,7 @@ CLI flags `--samples`, `--min-votes`, and `--mock` override behavior for that ru
 
 When `LLM_GOLD_*_PROMPT_FILE` is unset, prompts load from **`configs/prompts/labeling_system_prompt.txt`** and **`configs/prompts/labeling_user_prompt.txt`** (repo root relative). Override with absolute paths or paths relative to the repo root.
 
-Synthetic `engine: llm` uses a separate trio under the same directory (`synthetic_llm_*.txt`), referenced from each `configs/synthetic_*.json` via `llm.prompt_file`, `user_prompt_file`, and `feedback_prompt_file` (paths relative to that JSON file). See [synthetic.md](synthetic.md).
+Synthetic `engine: llm` uses a separate trio under the same directory (`synthetic_llm_*.txt`), referenced from each `configs/synthetic_*.yaml` via `llm.prompt_file`, `user_prompt_file`, and `feedback_prompt_file` (paths relative to that YAML file). See [synthetic.md](synthetic.md).
 
 ## Synthetic / build logging
 

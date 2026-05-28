@@ -1,0 +1,10 @@
+file-example-post.md:
+  - text: OpenAI
+    label: organization
+  - text: GPT-4
+    label: model
+arxiv-1706.03762:
+  - text: network architecture, the Transformer
+    label: model
+  - text: 28.4 BLEU
+    label: metric

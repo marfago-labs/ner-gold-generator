@@ -18,8 +18,10 @@ Optional extras:
 
 | Extra | When |
 |-------|------|
-| `llm` | Live OpenRouter calls (`openai` package) |
-| `dev` | pytest, ruff, mypy, pre-commit, PyYAML |
+| `llm` | Live OpenRouter calls (`openai`, `agno`, …) |
+| `dev` | pytest, ruff, mypy, pre-commit |
+
+**PyYAML** is a core dependency (synthetic and manual configs use YAML under `configs/`).
 
 ```bash
 uv sync --extra dev --extra llm
@@ -71,10 +73,20 @@ uv run build-gold --source youtube --mode llm --mock \
 ```bash
 uv run build-gold --source folder \
   --input ./my-articles \
-  --manual docs/examples/manual-sample.json \
+  --manual docs/examples/manual-sample.yaml \
   --mode manual \
   --output output/blog_gold.jsonl
 ```
+
+### Synthetic gold (no external corpus)
+
+```bash
+uv run build-gold --source synthetic \
+  --synthetic-config configs/synthetic_smoke.yaml \
+  --output output/synthetic_gold.jsonl
+```
+
+See [Synthetic generation](synthetic.md) for LLM configs, document profiles, and per-document logs.
 
 ## Entry points
 

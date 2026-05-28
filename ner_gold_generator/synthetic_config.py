@@ -3,21 +3,21 @@
 Repository layout (relative to the package root)::
 
     configs/
-      synthetic_llm.json          # example batch spec
+      synthetic_llm.yaml          # example batch spec
       prompts/                    # LLM prompt templates (not inlined in Python)
         synthetic_llm_system_prompt.txt
         synthetic_llm_user_prompt.txt
         synthetic_llm_feedback_prompt.txt
         labeling_system_prompt.txt
         labeling_user_prompt.txt
-      document_profiles/          # per-genre YAML/JSON overrides
+      document_profiles/          # per-genre YAML overrides
 
-Synthetic JSON files reference prompts with paths relative to the config file,
-for example ``"prompt_file": "prompts/synthetic_llm_system_prompt.txt"``.
+Synthetic YAML files reference prompts with paths relative to the config file,
+for example ``prompt_file: prompts/synthetic_llm_system_prompt.txt``.
 :func:`load_synthetic_config` reads those files and inlines the text into
 :class:`LlmSyntheticConfig` before validation.
 
-Omitted JSON fields receive code defaults (see :class:`SyntheticConfig` and
+Omitted YAML fields receive code defaults (see :class:`SyntheticConfig` and
 :class:`TextLengthConfig`). When ``document_types`` or ``document_type`` is set,
 :func:`ner_gold_generator.document_profiles.merge_config_for_profile` may
 override ``text_length``, lexicon, ``label_weights``, and templates per document.
@@ -90,7 +90,9 @@ class LlmSyntheticConfig:
     request_delay_seconds: float = 0.0
     parallelism: int = 3
     agent_mode: str = "per_doc"
+    max_restarts: int = 1
     agno_db_path: str = ""
+    document_log_dir: str = ""  # per-document LLM trace files, e.g. logs/
     system_prompt: str = ""
     prompt_file: str = ""  # e.g. prompts/synthetic_llm_system_prompt.txt
     user_prompt: str = ""  # filled from user_prompt_file at load time
@@ -226,7 +228,9 @@ def _parse_llm(raw: dict[str, Any]) -> LlmSyntheticConfig:
         request_delay_seconds=float(raw.get("request_delay_seconds", 0.0)),
         parallelism=max(1, int(raw.get("parallelism", 3))),
         agent_mode=agent_mode,
+        max_restarts=max(0, int(raw.get("max_restarts", 1))),
         agno_db_path=str(raw.get("agno_db_path", "")).strip(),
+        document_log_dir=str(raw.get("document_log_dir", "")).strip(),
         system_prompt=str(raw.get("system_prompt", "")),
         prompt_file=str(raw.get("prompt_file", "")).strip(),
         user_prompt=str(raw.get("user_prompt", "")),

@@ -1,8 +1,19 @@
-"""Structured logging for LLM and Agno synthetic generation."""
+"""Structured logging for LLM and Agno synthetic generation.
+
+Writes prompt/response/failure traces to ``gold.log`` (via :mod:`ner_gold_generator.logger`)
+and optionally to per-document files under ``llm.document_log_dir`` or
+``--document-log-dir``.
+
+Configure per-document logs with :func:`configure_document_log_dir` before
+starting a synthetic batch. Paths are resolved relative to the synthetic YAML
+config directory when not absolute.
+"""
 
 from __future__ import annotations
 
 import threading
+import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 from ner_gold_generator.logger import get_logger
@@ -13,9 +24,49 @@ from ner_gold_generator.synthetic_generators import PlannedEntity
 
 _LOG_LOCK = threading.Lock()
 _LOGGER = get_logger(__name__)
+_DOCUMENT_LOG_DIR: Path | None = None
 
 EngineKind = Literal["stateless", "agno"]
 PromptKind = Literal["initial", "feedback"]
+
+
+def configure_document_log_dir(
+    path: Path | str | None,
+    *,
+    relative_to: Path | None = None,
+) -> Path | None:
+    """Write per-document synthetic LLM traces to ``{dir}/{document_id}.log``."""
+    global _DOCUMENT_LOG_DIR
+    if path is None or not str(path).strip():
+        _DOCUMENT_LOG_DIR = None
+        return None
+    log_dir = Path(str(path).strip())
+    if not log_dir.is_absolute() and relative_to is not None:
+        log_dir = (relative_to / log_dir).resolve()
+    else:
+        log_dir = log_dir.resolve()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    _DOCUMENT_LOG_DIR = log_dir
+    return log_dir
+
+
+def _document_log_path(document_id: str) -> Path | None:
+    if _DOCUMENT_LOG_DIR is None:
+        return None
+    safe = document_id.replace("/", "_").replace("\\", "_")
+    return _DOCUMENT_LOG_DIR / f"{safe}.log"
+
+
+def _append_document_log(document_id: str | None, level: str, body: str) -> None:
+    if not document_id:
+        return
+    log_path = _document_log_path(document_id)
+    if log_path is None:
+        return
+    stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    block = f"{stamp} {level.upper()}\n{body.rstrip()}\n\n"
+    with _LOG_LOCK, log_path.open("a", encoding="utf-8") as handle:
+        handle.write(block)
 
 
 def log_llm_prompt(
@@ -53,6 +104,7 @@ def log_llm_prompt(
     )
     with _LOG_LOCK:
         _LOGGER.debug(payload)
+    _append_document_log(document_id, "DEBUG", payload)
 
 
 def log_llm_response(
@@ -87,6 +139,7 @@ def log_llm_response(
     )
     with _LOG_LOCK:
         _LOGGER.debug(payload)
+    _append_document_log(document_id, "DEBUG", payload)
 
 
 def log_agno_session_start(
@@ -98,6 +151,12 @@ def log_agno_session_start(
     provider_max_attempts: int,
     validation_max_attempts: int,
 ) -> None:
+    body = (
+        "synthetic session start "
+        f"document_type={document_type} model={model_id} agent_mode=per_doc "
+        f"session_id={session_id} provider_max={provider_max_attempts} "
+        f"validation_max={validation_max_attempts}"
+    )
     _LOGGER.info(
         "synthetic session start doc=%s document_type=%s model=%s agent_mode=per_doc "
         "session_id=%s provider_max=%s validation_max=%s",
@@ -108,6 +167,7 @@ def log_agno_session_start(
         provider_max_attempts,
         validation_max_attempts,
     )
+    _append_document_log(document_id, "INFO", body)
 
 
 def log_agno_turn_start(
@@ -118,6 +178,10 @@ def log_agno_turn_start(
     prompt_kind: PromptKind,
     message_chars: int,
 ) -> None:
+    body = (
+        f"agno turn start turn={turn}/{turn_budget} "
+        f"prompt_kind={prompt_kind} message_chars={message_chars}"
+    )
     _LOGGER.debug(
         "agno turn start doc=%s turn=%s/%s prompt_kind=%s message_chars=%s",
         document_id,
@@ -126,6 +190,7 @@ def log_agno_turn_start(
         prompt_kind,
         message_chars,
     )
+    _append_document_log(document_id, "DEBUG", body)
 
 
 def log_agno_turn_success(
@@ -136,6 +201,10 @@ def log_agno_turn_success(
     used_exactly_once: int,
     planned: int,
 ) -> None:
+    body = (
+        f"synthetic session success turns={turn} text_len={text_len} "
+        f"entities={used_exactly_once}/{planned}"
+    )
     _LOGGER.info(
         "synthetic session success doc=%s turns=%s text_len=%s entities=%s/%s",
         document_id,
@@ -144,6 +213,7 @@ def log_agno_turn_success(
         used_exactly_once,
         planned,
     )
+    _append_document_log(document_id, "INFO", body)
 
 
 def log_synthetic_failure(
@@ -187,5 +257,7 @@ def log_synthetic_failure(
         lines.append(f"text length: {len(text)} chars")
     lines.append("generated text:")
     lines.append(text if text else "(empty)")
+    payload = "\n".join(lines)
     with _LOG_LOCK:
-        _LOGGER.warning("\n".join(lines))
+        _LOGGER.warning(payload)
+    _append_document_log(document_id, "WARNING", payload)

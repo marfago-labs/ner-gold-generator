@@ -98,7 +98,11 @@ uv sync --extra dev
 python -m pydoc ner_gold_generator
 python -m pydoc ner_gold_generator.labeling.label_text_with_llm_consensus
 python -m pydoc ner_gold_generator.build_gold.main
+python -m pydoc ner_gold_generator.synthetic.build_examples_from_config_path
+python -m pydoc ner_gold_generator.synthetic_config.load_synthetic_config
 ```
+
+**PyYAML** is installed by default (`uv sync`); synthetic configs under `configs/*.yaml` do not need the `dev` extra.
 
 Generate static HTML into `docs/_pydoc/` (gitignored if you add it to `.gitignore`):
 

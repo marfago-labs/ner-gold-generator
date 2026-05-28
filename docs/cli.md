@@ -11,7 +11,7 @@
 uv run build-gold --help
 ```
 
-For **LLM** modes (`--mode llm` or `synthetic` with `"engine": "llm"`), install optional dependencies first:
+For **LLM** modes (`--mode llm` or synthetic with `engine: llm` in YAML), install optional dependencies first:
 
 ```bash
 uv sync --extra llm
@@ -28,7 +28,7 @@ uv pip install --force-reinstall jiter
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--source` | `arxiv` | `arxiv`, `youtube`, `folder`, `jsonl`, `synthetic` |
-| `--synthetic-config` | — | YAML/JSON spec (required for `synthetic`; see [synthetic.md](synthetic.md)) |
+| `--synthetic-config` | — | YAML spec (required for `synthetic`; JSON still accepted; see [synthetic.md](synthetic.md)) |
 | `--input` | *(source default)* | Input directory or JSONL file path |
 | `--output` | `../ner-detector/benchmark/datasets/arxiv_gold.jsonl` | Output JSONL path |
 | `--mode` | `manual` | `manual` or `llm` |
@@ -41,6 +41,7 @@ uv pip install --force-reinstall jiter
 | `--limit` | — | Process only first N documents |
 | `--quiet` | false | Suppress progress on stderr |
 | `--verbose` | false | Print detailed step-by-step logs on stderr |
+| `--document-log-dir` | — | Per-document LLM logs under `DIR/<document_id>.log` (see also `llm.document_log_dir` in synthetic YAML) |
 
 Progress goes to **stderr** via [Rich](https://github.com/Textualize/rich) on interactive terminals (stable bar + skip lines that do not overwrite each other). Non-TTY runs (pipes, tests) use plain ASCII lines. Synthetic LLM runs also show attempt `1/3` while waiting on OpenRouter. Use `--quiet` to disable stderr progress/logging. The final `Wrote …` line goes to **stdout**; a **statistics** block (counts, label histogram, **lexical diversity** distinct-1/2 quality numbers, synthetic entity-plan totals, elapsed time and throughput) is printed to **stderr** after a successful run (and after Ctrl+C when partial output was written).
 
@@ -85,7 +86,7 @@ uv run build-gold --source youtube --mode llm --mock --limit 1 \
 
 # Markdown folder only
 uv run build-gold --source folder --input ./content --glob "*.md" \
-  --manual annotations.json --mode manual \
+  --manual docs/examples/manual-sample.yaml --mode manual \
   --output output/md_gold.jsonl
 
 # Import JSONL corpus + LLM
@@ -94,7 +95,7 @@ uv run build-gold --source jsonl --input corpus.jsonl --mode llm \
 
 # Synthetic procedural gold (no corpus, no API)
 uv run build-gold --source synthetic \
-  --synthetic-config configs/synthetic_smoke.json \
+  --synthetic-config configs/synthetic_smoke.yaml \
   --output output/synthetic_gold.jsonl
 ```
 
@@ -117,3 +118,14 @@ for ent in result.entities:
 ```
 
 See `ner_gold_generator.labeling` for `entities_to_gold_dict`, `extract_entities_once`, etc.
+
+Synthetic builds from YAML:
+
+```python
+from pathlib import Path
+from ner_gold_generator.synthetic import build_examples_from_config_path
+
+result = build_examples_from_config_path(Path("configs/synthetic_smoke.yaml"), mock=True)
+```
+
+See [api.md](api.md) for the full module index and pydoc commands.

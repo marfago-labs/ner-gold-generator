@@ -1,9 +1,9 @@
 """Load and merge per-genre document profiles for synthetic generation.
 
 Profiles live under ``configs/document_profiles/`` (or ``document_profiles_dir``
-relative to the synthetic JSON file). Each YAML/JSON file defines
-``style_description``, optional ``templates``, ``lexicon``, ``label_weights``,
-and ``text_length`` overrides.
+relative to the synthetic YAML file). Each profile defines ``style_description``,
+optional ``templates``, ``lexicon``, ``label_weights``, and ``text_length``
+overrides.
 
 :func:`merge_config_for_profile` applies those overrides per document before
 planning entities and calling the LLM. See ``docs/synthetic.md`` for merge

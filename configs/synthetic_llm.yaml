@@ -1,0 +1,59 @@
+# Single-genre LLM batch (scientific abstracts). See configs/synthetic_reference.yaml.
+
+# --- Core ---
+seed: 42
+num_documents: 50
+engine: llm
+document_type: scientific_abstract # use document_types instead for a mix
+# document_types:
+#   - type: scientific_abstract
+#     weight: 1.0
+document_profiles_dir: document_profiles
+# domain: scientific_abstract
+
+text_length:
+  min_chars: 1500
+  max_chars: 2000
+
+entities_per_document:
+  distribution: fixed # uniform | fixed | poisson
+  fixed: 6
+  # min: 3
+  # max: 8
+  # lambda: 6.0
+
+label_weights:
+  model: 0.2
+  dataset: 0.15
+  metric: 0.15
+  organization: 0.1
+  date: 0.1
+  number: 0.1
+  year: 0.1
+  method: 0.1
+
+# --- Optional ---
+# lexicon:
+#   model: [Transformer, BERT]
+# generators:
+#   date:
+#     formats: ["%d %b %Y"]
+# templates:
+#   - "We propose {e0} on {e1}."
+
+llm:
+  model: openai/gpt-oss-120b:free
+  agent_mode: per_doc # per_doc | stateless
+  max_attempts: 3 # legacy; also sets split budgets if omitted
+  provider_max_attempts: 2
+  validation_max_attempts: 10
+  max_restarts: 2
+  temperature: 0.4
+  timeout_seconds: 90
+  request_delay_seconds: 2 # helps free-tier rate limits
+  parallelism: 50
+  prompt_file: prompts/synthetic_llm_system_prompt.txt
+  user_prompt_file: prompts/synthetic_llm_user_prompt.txt
+  feedback_prompt_file: prompts/synthetic_llm_feedback_prompt.txt
+  # agno_db_path: ""
+  # document_log_dir: logs_tmp

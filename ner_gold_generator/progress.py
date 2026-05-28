@@ -114,6 +114,8 @@ class Progress:
     _rich_console: Any = field(default=None, repr=False)
     _rich_progress: Any = field(default=None, repr=False)
     _rich_task_id: Any = field(default=None, repr=False)
+    _track_done: int = field(default=0, repr=False)
+    _track_total: int = field(default=0, repr=False)
     _update_lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _use_rich(self) -> bool:
@@ -145,13 +147,25 @@ class Progress:
             self._rich_console.print(
                 f"[yellow]skipped[/] [bold]{doc_id}[/]: {reason}",
             )
-            return
-        self.log(f"skipped {doc_id}: {reason}")
+        else:
+            self.log(f"skipped {doc_id}: {reason}")
 
     def verbose_log(self, message: str) -> None:
         """Print a verbose step line when :attr:`verbose` is enabled."""
         if self.verbose and not self.quiet:
             _LOGGER.debug(f"verbose: {message}")
+
+    def set_activity(self, detail: str) -> None:
+        """Update in-flight status without advancing the completed count."""
+        if self.quiet:
+            return
+        detail = detail.rstrip()
+        if self._rich_progress is not None and self._rich_task_id is not None:
+            with self._update_lock:
+                self._rich_progress.update(self._rich_task_id, activity=detail)
+            return
+        if self._track_total > 0:
+            self.update_bar(self._track_done, self._track_total, detail=detail)
 
     @staticmethod
     def status_prefix(done: int, total: int) -> str:
@@ -247,25 +261,39 @@ class Progress:
             TextColumn("[bold]{task.description}"),
             BarColumn(),
             TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
-            TextColumn("•"),
+            TextColumn("|"),
             TextColumn("{task.completed}/{task.total}"),
             TimeElapsedColumn(),
+            TextColumn("|"),
+            TextColumn("{task.fields[activity]}", justify="left"),
             console=console,
             transient=False,
         ) as rich_prog:
             self._rich_progress = rich_prog
-            task_id = rich_prog.add_task(f"{label}: {total} total", total=total)
+            self._track_total = total
+            self._track_done = 0
+            description = f"{label}: {total} total"
+            task_id = rich_prog.add_task(description, total=total, activity="")
+            self._rich_task_id = task_id
 
             def tick(done: int, detail: str = "") -> None:
-                desc = detail if detail else label
+                self._track_done = done
                 with self._update_lock:
-                    rich_prog.update(task_id, completed=done, description=desc)
+                    rich_prog.update(
+                        task_id,
+                        completed=done,
+                        description=description,
+                        activity=detail,
+                    )
 
             try:
                 yield tick
             finally:
                 self._rich_progress = None
                 self._rich_console = None
+                self._rich_task_id = None
+                self._track_total = 0
+                self._track_done = 0
 
     def _track_plain(
         self,
@@ -273,11 +301,14 @@ class Progress:
         *,
         label: str,
     ) -> Iterator[Callable[[int, str], None]]:
+        self._track_total = total
+        self._track_done = 0
         self.log(f"{label}: {total} total")
         if self.use_bar and total > 0:
             self.update_bar(0, total, detail="starting…")
 
         def tick(done: int, detail: str = "") -> None:
+            self._track_done = done
             self.update_bar(done, total, detail=detail)
 
         try:
@@ -287,3 +318,6 @@ class Progress:
             raise
         else:
             self.finish_bar()
+        finally:
+            self._track_total = 0
+            self._track_done = 0

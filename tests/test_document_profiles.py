@@ -27,6 +27,27 @@ def test_load_document_profiles_from_repo() -> None:
     assert profiles["news_article"].style_description
 
 
+def test_transcript_profile_avoids_speaker_role_lexicon() -> None:
+    profiles = load_document_profiles(_REPO / "configs" / "document_profiles")
+    transcript = profiles["transcript"]
+    people = transcript.lexicon.get("person", ())
+    blocked = {"Host", "Guest", "Chris"}
+    assert blocked.isdisjoint(set(people))
+    assert any(" " in name for name in people)
+
+
+def test_merge_transcript_profile_uses_distinct_lexicon() -> None:
+    base = parse_synthetic_config_dict({"document_type": "transcript"})
+    profile = get_document_profile(
+        base,
+        "transcript",
+        profiles=load_document_profiles(_REPO / "configs" / "document_profiles"),
+    )
+    merged = merge_config_for_profile(base, profile)
+    assert "Northwind Research" in merged.lexicon.get("organization", ())
+    assert "Host" not in merged.lexicon.get("person", ())
+
+
 def test_sample_document_type_mixed_deterministic() -> None:
     config = parse_synthetic_config_dict(
         {
@@ -67,6 +88,23 @@ def test_load_profile_json_and_errors(tmp_path: Path) -> None:
         from ner_gold_generator.document_profiles import _load_profile_file
 
         _load_profile_file(bad)
+
+    yaml_path = tmp_path / "needs_yaml.yaml"
+    yaml_path.write_text("id: yaml_profile\nstyle_description: YAML style\n", encoding="utf-8")
+    import builtins
+
+    real_import = builtins.__import__
+
+    def fake_import(name: str, *args: object, **kwargs: object):
+        if name == "yaml":
+            raise ImportError("no yaml")
+        return real_import(name, *args, **kwargs)
+
+    with pytest.raises(ImportError, match="PyYAML"), pytest.MonkeyPatch.context() as mp:
+        mp.setattr(builtins, "__import__", fake_import)
+        from ner_gold_generator.document_profiles import _load_profile_file
+
+        _load_profile_file(yaml_path)
 
     no_style = tmp_path / "empty.json"
     no_style.write_text(json.dumps({"id": "x"}), encoding="utf-8")

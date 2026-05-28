@@ -1,0 +1,62 @@
+# Mixed-genre LLM batch (news / blog / transcript). See configs/synthetic_reference.yaml
+# for all options. Requires: uv sync --extra llm and OPENROUTER_API_KEY.
+
+# --- Core ---
+seed: 1
+num_documents: 30
+engine: llm # procedural | llm
+# domain: scientific_abstract # style hint when no document_type / document_types
+# document_type: news_article # single genre for all documents (use this OR document_types)
+document_profiles_dir: document_profiles
+document_types: # weighted mix; one profile sampled per document
+  - type: news_article
+    weight: 0.4
+  - type: blog_post
+    weight: 0.3
+  - type: transcript
+    weight: 0.3
+
+# --- Text length (optional; each profile may override min/max) ---
+# text_length:
+#   min_chars: 200
+#   max_chars: 800
+
+# --- Entity planning ---
+entities_per_document:
+  distribution: fixed # uniform | fixed | poisson
+  fixed: 5
+  # min: 3
+  # max: 8
+  # lambda: 6.0
+
+# --- Label mix (omit => built-in defaults, then profile overrides) ---
+# label_weights:
+#   model: 0.15
+#   dataset: 0.12
+
+# --- Lexicon / generators / templates (procedural engine only for templates) ---
+# lexicon:
+#   model: [Transformer, BERT]
+# generators:
+#   date:
+#     formats: ["%d/%m/%Y", "%B %d, %Y"]
+# templates:
+#   - "We propose {e0} on {e1}."
+
+# --- LLM (required for engine: llm) ---
+llm:
+  model: openai/gpt-oss-120b:free
+  agent_mode: per_doc # per_doc | stateless
+  provider_max_attempts: 2 # API / JSON failures
+  validation_max_attempts: 2 # surface / length validation failures
+  max_restarts: 2 # replan entities after validation budget exhausted
+  parallelism: 10 # concurrent documents
+  prompt_file: prompts/synthetic_llm_system_prompt.txt
+  user_prompt_file: prompts/synthetic_llm_user_prompt.txt
+  feedback_prompt_file: prompts/synthetic_llm_feedback_prompt.txt
+  # document_log_dir: logs_tmp # per-document logs under configs/logs_tmp/
+  # max_attempts: 3 # legacy combined retry knob
+  # temperature: 0.4
+  # timeout_seconds: 120
+  # request_delay_seconds: 0
+  # agno_db_path: ""

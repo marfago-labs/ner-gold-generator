@@ -55,6 +55,30 @@ def test_build_validation_feedback_renders_issues() -> None:
     assert "10-20" in msg
 
 
+def test_build_validation_feedback_transcript_duplicate_hint() -> None:
+    config = parse_synthetic_config_dict({"llm": make_llm_config()})
+    msg = build_validation_feedback(
+        ["Surface 'Chris' appears 6 times (expected 1)"],
+        config=config,
+        min_chars=10,
+        max_chars=20,
+        document_type="transcript",
+    )
+    assert "Host:/Guest:" in msg
+
+
+def test_build_validation_feedback_transcript_skips_hint_without_duplicates() -> None:
+    config = parse_synthetic_config_dict({"llm": make_llm_config()})
+    msg = build_validation_feedback(
+        ["length is 5 characters, target is 10-20 characters"],
+        config=config,
+        min_chars=10,
+        max_chars=20,
+        document_type="transcript",
+    )
+    assert "Host:/Guest:" not in msg
+
+
 def test_agno_provider_retry_then_success() -> None:
     openai = pytest.importorskip("openai")
     httpx = pytest.importorskip("httpx")
@@ -80,7 +104,7 @@ def test_agno_provider_retry_then_success() -> None:
     def factory() -> _FlakyAgent:
         return _FlakyAgent([rate_err, good])
 
-    text = asyncio.run(
+    text, _plan = asyncio.run(
         generate_text_with_agno_async(
             plan,
             config,
@@ -101,7 +125,7 @@ def test_parse_text_from_run_non_json_string() -> None:
 
 
 def test_load_repo_synthetic_llm_config() -> None:
-    cfg = load_synthetic_config(_REPO / "configs" / "synthetic_llm.json")
+    cfg = load_synthetic_config(_REPO / "configs" / "synthetic_llm.yaml")
     assert cfg.llm.agent_mode == "per_doc"
     assert cfg.llm.user_prompt
     assert cfg.llm.feedback_prompt
@@ -124,7 +148,7 @@ def test_stateless_async_generate() -> None:
             del system, user, temperature, call_label
             return {"text": "We study BERT on GLUE with additional context for length."}
 
-    text = asyncio.run(
+    text, _plan = asyncio.run(
         generate_text_with_llm_async(
             plan,
             config,
@@ -161,6 +185,42 @@ def test_create_synthetic_agent_uses_factory() -> None:
         agent_factory=lambda: _Stub(),
     )
     assert isinstance(agent, _Stub)
+
+
+def test_create_synthetic_agent_sets_openrouter_role_map() -> None:
+    from unittest.mock import MagicMock, patch
+
+    from ner_gold_generator.synthetic_agno import create_synthetic_agent
+
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": make_llm_config(
+                agent_mode="per_doc",
+                system_prompt="You generate synthetic documents.",
+            ),
+        }
+    )
+    with (
+        patch("ner_gold_generator.synthetic_agno.Agent", MagicMock()) as mock_agent_cls,
+        patch("agno.models.openrouter.OpenRouterResponses", MagicMock()) as mock_or_cls,
+        patch(
+            "ner_gold_generator.synthetic_agno.build_agno_sqlite_db",
+            return_value=MagicMock(),
+        ),
+    ):
+        create_synthetic_agent(
+            config,
+            LlmGoldSettings.model_construct(openrouter_api_key="k"),
+            document_id="doc-1",
+        )
+    or_kwargs = mock_or_cls.call_args.kwargs
+    assert or_kwargs["role_map"]["system"] == "system"
+    assert mock_agent_cls.call_args.kwargs["model"] is mock_or_cls.return_value
+    agent_kwargs = mock_agent_cls.call_args.kwargs
+    assert agent_kwargs["parse_response"] is False
+    assert agent_kwargs["use_json_mode"] is True
+    assert agent_kwargs["add_history_to_context"] is False
 
 
 def test_collect_validation_issues_empty_text() -> None:

@@ -1,7 +1,12 @@
 """Build NER gold JSONL from multiple corpus sources.
 
 Provides the ``build-gold`` CLI (:func:`main`) and helpers to assemble manual or
-LLM-labeled examples written as JSONL for downstream benchmarks.
+LLM-labeled examples, or synthetic gold from ``configs/synthetic_*.yaml``.
+
+See Also:
+    docs/cli.md: CLI flags and exit codes.
+    docs/synthetic.md: Synthetic YAML config and Agno sessions.
+    docs/api.md: pydoc module index.
 """
 
 from __future__ import annotations
@@ -251,7 +256,7 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--synthetic-config",
         type=Path,
         default=None,
-        help="YAML/JSON config for --source synthetic (required for synthetic)",
+        help="YAML config for --source synthetic (JSON accepted; required for synthetic)",
     )
     parser.add_argument(
         "--input",
@@ -319,6 +324,15 @@ def _parse_args(argv: list[str] | None) -> argparse.Namespace:
         "--verbose",
         action="store_true",
         help="Show detailed step logs on stderr",
+    )
+    parser.add_argument(
+        "--document-log-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Write each synthetic document's LLM trace to DIR/<document_id>.log "
+            "(overrides llm.document_log_dir in the synthetic config)"
+        ),
     )
     return parser.parse_args(argv)
 
@@ -439,6 +453,7 @@ def _run_build(
             settings=settings,
             mock=args.mock or settings.mock_llm,
             progress=progress,
+            document_log_dir=args.document_log_dir,
         )
         examples = synthetic_result.examples
         skipped_documents = [s.to_dict() for s in synthetic_result.skipped]

@@ -31,9 +31,10 @@ def test_parallelism_one_runs_sequential_no_tasks(monkeypatch: pytest.MonkeyPatc
     )
     monkeypatch.setattr(syn_mod, "build_async_chat_client", lambda *_a, **_k: MagicMock())
 
-    async def _fast_async(plan: list, cfg: object, **_kw: object) -> str:
+    async def _fast_async(plan: list, cfg: object, **_kw: object) -> tuple[str, list]:
         await asyncio.sleep(0)
-        return assemble_mock_llm_text(plan, cfg)  # type: ignore[arg-type]
+        text = assemble_mock_llm_text(plan, cfg)  # type: ignore[arg-type]
+        return text, plan
 
     monkeypatch.setattr(syn_mod, "generate_text_with_llm_async", _fast_async)
 
@@ -66,11 +67,12 @@ def test_parallel_worker_failure_cancels_pending_tasks(monkeypatch: pytest.Monke
 
     calls = {"n": 0}
 
-    async def _flaky_async(plan: list, cfg: object, **_kwargs: object) -> str:
+    async def _flaky_async(plan: list, cfg: object, **_kwargs: object) -> tuple[str, list]:
         calls["n"] += 1
         if calls["n"] == 1:
             raise ValueError("simulated worker failure")
-        return assemble_mock_llm_text(plan, cfg)  # type: ignore[arg-type]
+        text = assemble_mock_llm_text(plan, cfg)  # type: ignore[arg-type]
+        return text, plan
 
     monkeypatch.setattr(syn_mod, "generate_text_with_llm_async", _flaky_async)
 

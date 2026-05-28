@@ -68,6 +68,18 @@ def test_progress_rich_track() -> None:
     prog.update_bar(1, 2, detail="x" * 200)
 
 
+def test_progress_set_activity_does_not_advance_completed() -> None:
+    pytest.importorskip("rich")
+    prog = Progress(quiet=False, use_rich=True)
+    with prog.track(3, label="synthetic") as tick:
+        prog.set_activity("doc-a: calling LLM…")
+        tick(0, "")
+        prog.set_activity("doc-b: rate limited — 12s left")
+        tick(1, "doc-a done")
+        prog.set_activity("")
+        tick(2, "doc-b done")
+
+
 def test_format_skip_error_fallbacks() -> None:
     assert "validation failed" in format_skip_error("reason=validation foo")
     assert "provider" in format_skip_error("reason=provider provider_failures=1/1")

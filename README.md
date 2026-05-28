@@ -1,6 +1,8 @@
 # ner-gold-generator
 
-Build **NER benchmark gold JSONL** from arXiv abstracts, YouTube transcripts, document folders, or JSONL corpora — with **manual** curation or **multi-sample LLM** labeling.
+Build **NER benchmark gold JSONL** from arXiv abstracts, YouTube transcripts, document folders, JSONL corpora, or **synthetic YAML configs** — with **manual** curation or **multi-sample LLM** labeling.
+
+Example configs: `configs/synthetic_*.yaml`, manual annotations: `docs/examples/manual-sample.yaml`.
 
 Output is consumed by [ner-detector](https://github.com/marfago-labs/ner-detector) (`benchmark/datasets/*.jsonl`).
 

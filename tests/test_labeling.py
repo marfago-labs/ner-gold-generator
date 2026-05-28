@@ -164,6 +164,16 @@ def test_validate_duplicate_span_label() -> None:
     assert len(validate_proposed_entities(text, proposed)) == 1
 
 
+def test_validate_skips_invalid_label_and_empty_surface() -> None:
+    text = "GPT-3"
+    proposed = [
+        ProposedEntity("GPT-3", "not_a_real_label"),
+        ProposedEntity("   ", "model"),
+        ProposedEntity("GPT-3", "model"),
+    ]
+    assert len(validate_proposed_entities(text, proposed)) == 1
+
+
 def test_resolve_openrouter_model_id_requires_value() -> None:
     with pytest.raises(ValueError, match="LLM model id is required"):
         resolve_openrouter_model_id(LlmGoldSettings())

@@ -43,8 +43,11 @@ def _run(coro):
 def test_async_mock_shortcut() -> None:
     config = parse_synthetic_config_dict({"engine": "llm", "llm": make_llm_config()})
     plan = [PlannedEntity("BERT", "model")]
-    text = _run(generate_text_with_llm_async(plan, config, settings=LlmGoldSettings(), mock=True))
+    text, used_plan = _run(
+        generate_text_with_llm_async(plan, config, settings=LlmGoldSettings(), mock=True)
+    )
     assert text
+    assert used_plan == plan
 
 
 def test_async_requires_document_id_for_per_doc() -> None:
@@ -212,7 +215,7 @@ def test_async_generic_retryable_then_success() -> None:
     client = _AsyncClient(handler)
     statuses: list[str] = []
     elapsed: list[tuple[int, float, str]] = []
-    text = _run(
+    text, _used = _run(
         generate_text_with_llm_async(
             plan,
             config,
@@ -287,7 +290,7 @@ def test_async_success_with_callbacks() -> None:
         return {"text": good}
 
     client = _AsyncClient(handler)
-    text = _run(
+    text, _used = _run(
         generate_text_with_llm_async(
             plan,
             config,

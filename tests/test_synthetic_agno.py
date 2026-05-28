@@ -68,7 +68,7 @@ def test_agno_feedback_loop_fixes_entities() -> None:
     def factory() -> _FakeAgent:
         return _FakeAgent([bad, good])
 
-    text = asyncio.run(
+    text, _plan = asyncio.run(
         generate_text_with_agno_async(
             plan,
             config,
@@ -110,6 +110,166 @@ def test_agno_exhaustion_raises() -> None:
                 agent_factory=factory,
             )
         )
+
+
+def test_agno_restarts_trajectory_after_validation_threshold() -> None:
+    from unittest.mock import patch
+
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": make_llm_config(
+                agent_mode="per_doc",
+                provider_max_attempts=1,
+                validation_max_attempts=4,
+                max_restarts=1,
+            ),
+            "text_length": {"min_chars": 10, "max_chars": 5000},
+        }
+    )
+    plan = [PlannedEntity("BERT", "model"), PlannedEntity("GLUE", "dataset")]
+    good = assemble_mock_llm_text(plan, config)
+    bad = '{"text": "no entities"}'
+    factory_calls = 0
+
+    def factory() -> _FakeAgent:
+        nonlocal factory_calls
+        factory_calls += 1
+        if factory_calls == 1:
+            return _FakeAgent([bad, bad, bad, bad])
+        return _FakeAgent([good])
+
+    with patch(
+        "ner_gold_generator.synthetic_agno.plan_entities_for_document",
+        lambda _rng, _cfg: plan,
+    ):
+        text, final_plan = asyncio.run(
+            generate_text_with_agno_async(
+                plan,
+                config,
+                settings=LlmGoldSettings.model_construct(openrouter_api_key="k"),
+                document_id="synthetic-test-agno-restart",
+                document_type="scientific_abstract",
+                style_description="Scientific abstract",
+                agent_factory=factory,
+                doc_seed=42,
+                doc_config=config,
+            )
+        )
+    assert "BERT" in text
+    assert factory_calls == 2
+    assert final_plan == plan
+
+
+def test_agno_restart_replans_entities(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": make_llm_config(
+                agent_mode="per_doc",
+                provider_max_attempts=1,
+                validation_max_attempts=2,
+                max_restarts=1,
+            ),
+            "text_length": {"min_chars": 10, "max_chars": 5000},
+        }
+    )
+    first_plan = [PlannedEntity("HOST", "org"), PlannedEntity("GUEST", "person")]
+    second_plan = [PlannedEntity("BERT", "model"), PlannedEntity("GLUE", "dataset")]
+    good = assemble_mock_llm_text(second_plan, config)
+    bad = '{"text": "no entities"}'
+    plan_calls = 0
+
+    def fake_plan(_rng: object, _cfg: object) -> list[PlannedEntity]:
+        nonlocal plan_calls
+        plan_calls += 1
+        return second_plan
+
+    monkeypatch.setattr(
+        "ner_gold_generator.synthetic_agno.plan_entities_for_document",
+        fake_plan,
+    )
+    factory_calls = 0
+
+    def factory() -> _FakeAgent:
+        nonlocal factory_calls
+        factory_calls += 1
+        if factory_calls == 1:
+            return _FakeAgent([bad, bad])
+        return _FakeAgent([good, good])
+
+    text, final_plan = asyncio.run(
+        generate_text_with_agno_async(
+            first_plan,
+            config,
+            settings=LlmGoldSettings.model_construct(openrouter_api_key="k"),
+            document_id="synthetic-test-agno-replan",
+            document_type="transcript",
+            style_description="Transcript",
+            agent_factory=factory,
+            doc_seed=7,
+            doc_config=config,
+        )
+    )
+    assert "BERT" in text
+    assert plan_calls == 1
+    assert final_plan == second_plan
+
+
+def test_agno_final_failure_logs_replanned_entities(monkeypatch: pytest.MonkeyPatch) -> None:
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": make_llm_config(
+                agent_mode="per_doc",
+                provider_max_attempts=1,
+                validation_max_attempts=2,
+                max_restarts=1,
+            ),
+            "text_length": {"min_chars": 10, "max_chars": 5000},
+        }
+    )
+    first_plan = [PlannedEntity("HOST", "organization"), PlannedEntity("GUEST", "person")]
+    second_plan = [PlannedEntity("BERT", "model"), PlannedEntity("GLUE", "dataset")]
+    bad = '{"text": "no entities"}'
+    logged_plans: list[list[PlannedEntity]] = []
+
+    def fake_plan(_rng: object, _cfg: object) -> list[PlannedEntity]:
+        return second_plan
+
+    def capture_failure(**kwargs: object) -> None:
+        plan = kwargs.get("plan")
+        if isinstance(plan, list):
+            logged_plans.append(plan)
+
+    monkeypatch.setattr(
+        "ner_gold_generator.synthetic_agno.plan_entities_for_document",
+        fake_plan,
+    )
+    monkeypatch.setattr(
+        "ner_gold_generator.synthetic_agno.log_synthetic_failure",
+        capture_failure,
+    )
+
+    def factory() -> _FakeAgent:
+        return _FakeAgent([bad, bad, bad, bad])
+
+    with pytest.raises(ValueError, match="reason=validation"):
+        asyncio.run(
+            generate_text_with_agno_async(
+                first_plan,
+                config,
+                settings=LlmGoldSettings.model_construct(openrouter_api_key="k"),
+                document_id="synthetic-test-agno-final-plan",
+                document_type="transcript",
+                style_description="Transcript",
+                agent_factory=factory,
+                doc_seed=11,
+                doc_config=config,
+            )
+        )
+    assert logged_plans
+    assert logged_plans[-1] == second_plan
 
 
 def test_extract_run_text_plain_string() -> None:
@@ -203,7 +363,7 @@ def test_agno_sync_run_path() -> None:
             del message, session_id, user_id
             return _FakeRun(good)
 
-    text = asyncio.run(
+    text, _plan = asyncio.run(
         generate_text_with_agno_async(
             plan,
             config,
@@ -255,6 +415,63 @@ def test_extract_run_text_dict_content() -> None:
     assert "dict body" in text
 
 
+def test_agno_agno_style_rate_limit_string_waits_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = 1_700_000_000.0
+    reset_ms = int((now + 2.0) * 1000)
+    agno_msg = (
+        "Rate limit error from OpenAI API: Error code: 429 - "
+        f"{{'error': {{'metadata': {{'headers': {{'X-RateLimit-Reset': '{reset_ms}'}}}}}}}}"
+    )
+    config = parse_synthetic_config_dict(
+        {
+            "engine": "llm",
+            "llm": make_llm_config(agent_mode="per_doc", provider_max_attempts=2),
+            "text_length": {"min_chars": 10, "max_chars": 5000},
+        }
+    )
+    plan = [PlannedEntity("BERT", "model")]
+    good = assemble_mock_llm_text(plan, config)
+    recorded: list[float] = []
+
+    class _AgnoRateAgent:
+        def __init__(self) -> None:
+            self._n = 0
+
+        async def arun(
+            self, message: str, *, session_id: str | None = None, user_id: str | None = None
+        ) -> _FakeRun:
+            del message, session_id, user_id
+            self._n += 1
+            if self._n == 1:
+                raise RuntimeError(agno_msg)
+            return _FakeRun(good)
+
+    monkeypatch.setattr("ner_gold_generator.llm_client.time.time", lambda: now)
+
+    async def fake_sleep(seconds: float) -> None:
+        recorded.append(seconds)
+
+    monkeypatch.setattr(
+        "ner_gold_generator.synthetic_compose.asyncio.sleep",
+        fake_sleep,
+    )
+    text, _plan = asyncio.run(
+        generate_text_with_agno_async(
+            plan,
+            config,
+            settings=LlmGoldSettings.model_construct(openrouter_api_key="k"),
+            document_id="agno-rate-string",
+            document_type="transcript",
+            style_description="Transcript",
+            agent_factory=lambda: _AgnoRateAgent(),
+        )
+    )
+    assert "BERT" in text
+    assert sum(recorded) >= 1.0
+
+
 def test_agno_rate_limit_retries_then_succeeds() -> None:
     openai = pytest.importorskip("openai")
     httpx = pytest.importorskip("httpx")
@@ -286,7 +503,7 @@ def test_agno_rate_limit_retries_then_succeeds() -> None:
                 raise rate_err
             return _FakeRun(good)
 
-    text = asyncio.run(
+    text, _plan = asyncio.run(
         generate_text_with_agno_async(
             plan,
             config,

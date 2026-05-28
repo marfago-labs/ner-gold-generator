@@ -11,6 +11,7 @@ from tests.llm_test_helpers import make_llm_config
 from ner_gold_generator.llm_client import (
     LlmRequestError,
     OpenRouterChatClient,
+    compute_rate_limit_wait_seconds,
     describe_llm_api_error,
     raise_llm_request_error,
     retry_after_seconds_from_error,
@@ -313,6 +314,79 @@ def test_synthetic_requires_api_key_when_llm(monkeypatch: pytest.MonkeyPatch) ->
     settings = LlmGoldSettings.model_construct(openrouter_api_key="", mock_llm=False)
     with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
         build_examples_synthetic(config, settings=settings, mock=False)
+
+
+def test_describe_agno_wrapped_rate_limit_string() -> None:
+    now = 1_700_000_000.0
+    reset_ms = int((now + 120.0) * 1000)
+    message = (
+        "Rate limit error from OpenAI API: Error code: 429 - "
+        "{'error': {'message': 'Rate limit exceeded: @ratelimit/too-many-requests.', "
+        "'code': 429, 'metadata': {'headers': {'X-RateLimit-Remaining': '0', "
+        "'X-RateLimit-Reset': '" + str(reset_ms) + "'}}}}}"
+    )
+
+    class _AgnoWrapped(Exception):
+        pass
+
+    exc = _AgnoWrapped(message)
+    msg, retryable, code = describe_llm_api_error(exc, model_id="openai/gpt-oss-120b:free")
+    assert retryable
+    assert code == 429
+    assert "retry after" in msg
+    assert retry_after_seconds_from_error(exc, now=now) == pytest.approx(120.0, abs=0.01)
+
+
+def test_resolve_rate_limit_wait_seconds_default_when_unparseable() -> None:
+    from ner_gold_generator.llm_client import (
+        DEFAULT_RATE_LIMIT_BACKOFF_SECONDS,
+        resolve_rate_limit_wait_seconds,
+    )
+
+    class _Bare429(Exception):
+        pass
+
+    wait = resolve_rate_limit_wait_seconds(_Bare429("HTTP 429 too many requests"))
+    assert wait == pytest.approx(DEFAULT_RATE_LIMIT_BACKOFF_SECONDS + 0.5, abs=0.1)
+
+
+def test_retry_after_from_openrouter_x_ratelimit_reset_ms() -> None:
+    openai = pytest.importorskip("openai")
+    now = 1_700_000_000.0
+    reset_ms = int((now + 45.0) * 1000)
+    body = {
+        "error": {
+            "message": "Rate limit exceeded",
+            "code": 429,
+            "metadata": {
+                "headers": {
+                    "X-RateLimit-Remaining": "0",
+                    "X-RateLimit-Reset": str(reset_ms),
+                }
+            },
+        }
+    }
+    exc = openai.RateLimitError("rate", response=_http_response(429, body), body=body)
+    delay = retry_after_seconds_from_error(exc, now=now)
+    assert delay == pytest.approx(45.0, abs=0.01)
+
+
+def test_retry_after_prefers_explicit_seconds_over_reset() -> None:
+    class _Exc:
+        body = {
+            "error": {
+                "metadata": {
+                    "retry_after_seconds": 7,
+                    "headers": {"X-RateLimit-Reset": "9999999999999"},
+                }
+            }
+        }
+
+    assert retry_after_seconds_from_error(_Exc(), now=0.0) == 7.0
+
+
+def test_compute_rate_limit_wait_seconds_caps_long_reset() -> None:
+    assert compute_rate_limit_wait_seconds(5000.0, cap_seconds=120.0) == 120.0
 
 
 def test_retry_after_from_openrouter_body() -> None:

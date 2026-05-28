@@ -1,9 +1,22 @@
-"""Synthetic gold JSONL generation (entity-first, deterministic structured values)."""
+"""Synthetic gold JSONL generation (entity-first, deterministic structured values).
+
+Plans entity surfaces from a YAML config and seed, generates document text
+(procedural templates or LLM prose), validates each planned surface appears
+exactly once, then exports gold offsets from the plan—not from LLM NER.
+
+Primary entry points:
+
+- :func:`build_examples_from_config_path` — load ``configs/synthetic_*.yaml``
+- :func:`build_examples_synthetic` — run from an in-memory :class:`~ner_gold_generator.synthetic_config.SyntheticConfig`
+
+See ``docs/synthetic.md`` for config fields, document profiles, and logging.
+"""
 
 from __future__ import annotations
 
 import asyncio
 import random
+import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -119,6 +132,7 @@ def build_examples_synthetic(
     mock: bool = False,
     progress: Progress | None = None,
     config_path: Path | None = None,
+    document_log_dir: str | Path | None = None,
 ) -> SyntheticBuildResult:
     """Generate gold rows from a synthetic config (procedural or LLM glue).
 
@@ -130,6 +144,7 @@ def build_examples_synthetic(
         mock: Force procedural mock text even for LLM engine.
         progress: Optional stderr progress helper.
         config_path: Path the config was loaded from (for profile resolution).
+        document_log_dir: Override ``llm.document_log_dir`` (CLI ``--document-log-dir``).
 
     Returns:
         Successful gold rows and any documents skipped after LLM retries.
@@ -140,6 +155,15 @@ def build_examples_synthetic(
     validate_synthetic_config(config)
     if config.num_documents < 1:
         raise ValueError("num_documents must be at least 1")
+
+    from ner_gold_generator.llm_logging import configure_document_log_dir
+
+    log_dir_raw = document_log_dir if document_log_dir is not None else config.llm.document_log_dir
+    log_dir_path = configure_document_log_dir(
+        str(log_dir_raw).strip() if log_dir_raw else None,
+        relative_to=config_path.parent if config_path is not None else None,
+    )
+
     engine = config.engine.lower()
     if engine not in {"procedural", "llm"}:
         raise ValueError(f"Unknown synthetic engine: {config.engine!r}")
@@ -150,6 +174,8 @@ def build_examples_synthetic(
     total = config.num_documents
     profiles = load_document_profiles(resolve_profiles_dir(config, config_path))
     prog.log(f"build_gold: mode=synthetic engine={engine} documents={total} seed={config.seed}")
+    if log_dir_path is not None:
+        prog.log(f"document LLM logs: {log_dir_path}")
     use_procedural = engine == "procedural" or mock or llm_settings.mock_llm
     if engine == "llm" and not use_procedural and not llm_settings.openrouter_api_key.strip():
         raise ValueError("engine=llm requires OPENROUTER_API_KEY in .env (or use --mock for tests)")
@@ -277,6 +303,32 @@ def _ordered_partial_examples(examples_by_idx: dict[int, dict], total: int) -> l
     return [examples_by_idx[i] for i in range(total) if i in examples_by_idx]
 
 
+class _InflightActivity:
+    """Aggregate per-document in-flight status into one progress activity line."""
+
+    def __init__(self, prog: Progress) -> None:
+        self._prog = prog
+        self._lock = threading.Lock()
+        self._docs: dict[str, str] = {}
+
+    def set(self, doc_id: str, message: str | None) -> None:
+        with self._lock:
+            if message is None:
+                self._docs.pop(doc_id, None)
+            else:
+                self._docs[doc_id] = message
+            summary = self._summarize_locked()
+        self._prog.set_activity(summary)
+
+    def _summarize_locked(self) -> str:
+        if not self._docs:
+            return ""
+        if len(self._docs) == 1:
+            doc_id, msg = next(iter(self._docs.items()))
+            return f"{doc_id}: {msg}"
+        return f"{len(self._docs)} documents in flight"
+
+
 async def _run_llm_documents_async(
     docs: list[_DocWorkItem],
     *,
@@ -294,6 +346,7 @@ async def _run_llm_documents_async(
     out: dict[int, dict] = {}
     skipped: list[SkippedDocument] = []
     use_agno = config.llm.agent_mode == "per_doc"
+    inflight = _InflightActivity(prog)
 
     async def run_one_async(
         item: _DocWorkItem,
@@ -316,26 +369,38 @@ async def _run_llm_documents_async(
                         f"{outcome} in {seconds:.1f}s"
                     )
 
-                text = await generate_text_with_llm_async(
-                    item.plan,
-                    item.doc_config,
-                    settings=llm_settings,
-                    mock=False,
-                    client=client,
-                    on_status=None,
-                    on_call_elapsed=on_call_elapsed,
-                    request_delay_seconds=config.llm.request_delay_seconds,
-                    document_id=item.doc_id,
-                    document_type=item.document_type,
-                    style_description=item.style_description,
-                )
+                def on_status(status: str) -> None:
+                    inflight.set(item.doc_id, status)
+                    prog.verbose_log(f"{item.doc_id}: {status}")
+
+                def on_wait(remaining: float, _detail: str) -> None:
+                    inflight.set(item.doc_id, f"rate limited — {remaining:.0f}s left")
+
+                try:
+                    text, final_plan = await generate_text_with_llm_async(
+                        item.plan,
+                        item.doc_config,
+                        settings=llm_settings,
+                        mock=False,
+                        client=client,
+                        on_status=on_status,
+                        on_wait=on_wait,
+                        on_call_elapsed=on_call_elapsed,
+                        request_delay_seconds=config.llm.request_delay_seconds,
+                        document_id=item.doc_id,
+                        document_type=item.document_type,
+                        style_description=item.style_description,
+                        doc_seed=item.doc_seed,
+                    )
+                finally:
+                    inflight.set(item.doc_id, None)
 
             row = _build_synthetic_row(
                 config=config,
                 doc_id=item.doc_id,
                 doc_idx=item.doc_idx,
                 doc_seed=item.doc_seed,
-                plan=item.plan,
+                plan=final_plan,
                 text=text,
                 text_engine="llm",
                 document_type=item.document_type,
@@ -412,6 +477,7 @@ def build_examples_from_config_path(
     settings: LlmGoldSettings | None = None,
     mock: bool = False,
     progress: Progress | None = None,
+    document_log_dir: str | Path | None = None,
 ) -> SyntheticBuildResult:
     """Load config from disk and run :func:`build_examples_synthetic`."""
     config = load_synthetic_config(config_path)
@@ -421,4 +487,5 @@ def build_examples_from_config_path(
         mock=mock,
         progress=progress,
         config_path=config_path,
+        document_log_dir=document_log_dir,
     )

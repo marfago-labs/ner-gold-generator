@@ -1,12 +1,24 @@
 id: transcript
 style_description: >
   A spoken transcript with speaker labels (e.g. "Host:", "Guest:"). Natural
-  dialogue, fillers allowed, timestamps optional. Multiple short turns.
+  dialogue, fillers allowed, timestamps optional. Multiple short turns. Planned
+  person and organization names are content entities (mention each exactly once);
+  use role labels for turn prefixes, not those names.
 templates:
-  - "Host: Welcome to the show. Today we discuss {e0} and {e1}.\nGuest: Thanks. We ran {e2} on {e3} in {e4}."
+  - |
+    Host: Thanks for joining us. Our guest works at {e0}.
+    Guest: We measured {e1} on the study dated {e2}.
+    Host: And headquarters for that work is {e3} in {e4}, right?
 lexicon:
-  person: ["Host", "Guest", "Dr. Lee", "Chris"]
-  organization: ["Acme Corp", "Tech Weekly"]
+  person:
+    - "Dr. Priya Sharma"
+    - "Marcus Chen"
+    - "Elena Volkov"
+    - "James Okafor"
+  organization:
+    - "Acme Corp"
+    - "Northwind Research"
+    - "Pelorus Media"
 label_weights:
   person: 0.25
   organization: 0.15

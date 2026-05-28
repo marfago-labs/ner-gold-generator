@@ -13,6 +13,18 @@ from ner_gold_generator.llm_logging import log_llm_prompt, log_llm_response
 _OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 _OPENROUTER_MODELS_URL = "https://openrouter.ai/models"
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 529})
+# OpenRouter free-tier resets can be minutes away; cap avoids unbounded sleeps.
+RATE_LIMIT_WAIT_CAP_SECONDS = 3600.0
+# Used when a 429 is recognized but no Retry-After / reset header is parseable.
+DEFAULT_RATE_LIMIT_BACKOFF_SECONDS = 30.0
+_RATE_LIMIT_RESET_RE = re.compile(
+    r"""['"]?X-RateLimit-Reset['"]?\s*:\s*['"]?(\d+)""",
+    re.IGNORECASE,
+)
+_RETRY_AFTER_META_RE = re.compile(
+    r"""retry_after_seconds(?:_raw)?['"]?\s*:\s*['"]?([\d.]+)""",
+    re.IGNORECASE,
+)
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n?", re.IGNORECASE)
 _LLM_INSTALL_HINT = "uv sync --extra llm"
 _JITER_REINSTALL_HINT = "uv pip install --force-reinstall jiter"
@@ -101,31 +113,160 @@ def _upstream_error_hint(exc: object) -> str:
     return ""
 
 
-def retry_after_seconds_from_error(exc: BaseException) -> float | None:
-    """Parse Retry-After / OpenRouter metadata from an SDK error."""
+def _iter_exception_chain(exc: BaseException) -> list[BaseException]:
+    """Return *exc* and linked causes/contexts (deduplicated, root-first)."""
+    seen: set[int] = set()
+    chain: list[BaseException] = []
+
+    def add(candidate: BaseException | None) -> None:
+        while candidate is not None and id(candidate) not in seen:
+            seen.add(id(candidate))
+            chain.append(candidate)
+            candidate = getattr(candidate, "__cause__", None) or getattr(
+                candidate, "__context__", None
+            )
+
+    add(exc)
+    return chain
+
+
+def _looks_like_rate_limit_message(text: str) -> bool:
+    lower = text.lower()
+    return (
+        "429" in text
+        or "rate limit" in lower
+        or "too-many-requests" in lower
+        or "@ratelimit/" in lower
+    )
+
+
+def _retry_after_from_text(text: str, *, now: float) -> float | None:
+    match = _RETRY_AFTER_META_RE.search(text)
+    if match is not None:
+        try:
+            return max(0.0, float(match.group(1)))
+        except (TypeError, ValueError):
+            pass
+    match = _RATE_LIMIT_RESET_RE.search(text)
+    if match is not None:
+        return _seconds_until_rate_limit_reset(match.group(1), now=now)
+    return None
+
+
+def _error_metadata(exc: BaseException) -> dict[str, Any] | None:
     body = getattr(exc, "body", None)
-    if isinstance(body, dict):
-        err = body.get("error")
-        if isinstance(err, dict):
-            meta = err.get("metadata")
-            if isinstance(meta, dict):
-                for key in ("retry_after_seconds", "retry_after_seconds_raw"):
-                    raw = meta.get(key)
-                    if raw is not None:
-                        try:
-                            return max(0.0, float(raw))
-                        except (TypeError, ValueError):
-                            pass
+    if not isinstance(body, dict):
+        return None
+    err = body.get("error")
+    if not isinstance(err, dict):
+        return None
+    meta = err.get("metadata")
+    return meta if isinstance(meta, dict) else None
+
+
+def _header_lookup(headers: object, name: str) -> str | None:
+    if headers is None:
+        return None
+    getter = getattr(headers, "get", None)
+    if callable(getter):
+        raw = getter(name) or getter(name.lower()) or getter(name.upper())
+        if raw is not None:
+            return str(raw)
+    if isinstance(headers, dict):
+        lowered = name.lower()
+        for key, value in headers.items():
+            if isinstance(key, str) and key.lower() == lowered and value is not None:
+                return str(value)
+    return None
+
+
+def _epoch_timestamp_to_seconds(raw: object) -> float | None:
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int | float):
+        value = float(raw)
+    elif isinstance(raw, str):
+        try:
+            value = float(raw.strip())
+        except ValueError:
+            return None
+    else:
+        return None
+    # OpenRouter sends X-RateLimit-Reset as epoch milliseconds.
+    if value > 1e12:
+        return value / 1000.0
+    if value > 1e9:
+        return value
+    return None
+
+
+def _seconds_until_rate_limit_reset(raw: object, *, now: float) -> float | None:
+    reset_at = _epoch_timestamp_to_seconds(raw)
+    if reset_at is None:
+        return None
+    delay = reset_at - now
+    if delay <= 0:
+        return None
+    return delay
+
+
+def compute_rate_limit_wait_seconds(
+    retry_after_seconds: float,
+    *,
+    cap_seconds: float = RATE_LIMIT_WAIT_CAP_SECONDS,
+) -> float:
+    """Bounded wait duration before retrying a rate-limited request."""
+    return min(max(1.0, retry_after_seconds + 0.5), cap_seconds)
+
+
+def _retry_after_from_exception_body(exc: BaseException, *, now: float) -> float | None:
+    meta = _error_metadata(exc)
+    if meta is not None:
+        for key in ("retry_after_seconds", "retry_after_seconds_raw"):
+            raw = meta.get(key)
+            if raw is not None:
+                try:
+                    return max(0.0, float(raw))
+                except (TypeError, ValueError):
+                    pass
+        meta_headers = meta.get("headers")
+        reset_raw = _header_lookup(meta_headers, "X-RateLimit-Reset")
+        if reset_raw is not None:
+            delay = _seconds_until_rate_limit_reset(reset_raw, now=now)
+            if delay is not None:
+                return delay
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None)
     if headers is not None:
-        retry_after = headers.get("retry-after") or headers.get("Retry-After")
+        retry_after = _header_lookup(headers, "Retry-After")
         if retry_after is not None:
             try:
                 return max(0.0, float(retry_after))
             except (TypeError, ValueError):
                 pass
+        reset_raw = _header_lookup(headers, "X-RateLimit-Reset")
+        if reset_raw is not None:
+            delay = _seconds_until_rate_limit_reset(reset_raw, now=now)
+            if delay is not None:
+                return delay
     return None
+
+
+def retry_after_seconds_from_error(
+    exc: BaseException,
+    *,
+    now: float | None = None,
+) -> float | None:
+    """Parse Retry-After / OpenRouter metadata from an SDK or wrapped Agno error."""
+    clock = time.time() if now is None else now
+    for linked in _iter_exception_chain(exc):
+        delay = _retry_after_from_exception_body(linked, now=clock)
+        if delay is not None:
+            return delay
+        from_text = _retry_after_from_text(str(linked), now=clock)
+        if from_text is not None:
+            return from_text
+    return _retry_after_from_text(str(exc), now=clock)
 
 
 def describe_llm_api_error(exc: BaseException, *, model_id: str) -> tuple[str, bool, int | None]:
@@ -181,6 +322,24 @@ def describe_llm_api_error(exc: BaseException, *, model_id: str) -> tuple[str, b
         detail = _api_error_message(exc)
         retryable = code in _RETRYABLE_STATUS_CODES
         return (f"OpenRouter API error {code} for {model_id!r}: {detail}", retryable, code)
+
+    for linked in _iter_exception_chain(exc):
+        if isinstance(linked, RateLimitError):
+            return describe_llm_api_error(linked, model_id=model_id)
+        if isinstance(linked, APIStatusError) and linked.status_code == 429:
+            return describe_llm_api_error(linked, model_id=model_id)
+
+    if _looks_like_rate_limit_message(str(exc)):
+        retry = retry_after_seconds_from_error(exc)
+        parts = [f"Rate limit (429) on model {model_id!r}"]
+        if retry is not None:
+            parts.append(f"retry after ~{retry:.0f}s")
+        else:
+            parts.append(
+                f"retry after ~{DEFAULT_RATE_LIMIT_BACKOFF_SECONDS:.0f}s (default backoff)"
+            )
+        return (" — ".join(parts), True, 429)
+
     return (f"LLM request failed for {model_id!r}: {exc}", False, None)
 
 
@@ -196,17 +355,37 @@ def raise_llm_request_error(exc: BaseException, *, model_id: str) -> NoReturn:
     ) from exc
 
 
+def resolve_rate_limit_wait_seconds(
+    exc: BaseException,
+    *,
+    now: float | None = None,
+) -> float | None:
+    """Seconds to wait before retrying after a rate-limit error (``None`` if not 429)."""
+    _msg, retryable, status = describe_llm_api_error(exc, model_id="")
+    if not retryable or status != 429:
+        return None
+    delay = retry_after_seconds_from_error(exc, now=now)
+    if delay is None:
+        delay = DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
+    return compute_rate_limit_wait_seconds(delay)
+
+
 def wait_for_retry(
     exc: LlmRequestError,
     *,
     on_wait: Callable[[float, str], None] | None = None,
-    cap_seconds: float = 120.0,
+    cap_seconds: float = RATE_LIMIT_WAIT_CAP_SECONDS,
     tick_seconds: float = 5.0,
 ) -> None:
-    """Sleep for rate-limit backoff when *exc* carries ``retry_after_seconds``."""
-    if not exc.retryable or exc.retry_after_seconds is None:
+    """Sleep for rate-limit backoff when *exc* is retryable (429)."""
+    if not exc.retryable:
         return
-    wait = min(max(1.0, exc.retry_after_seconds + 0.5), cap_seconds)
+    retry_after = exc.retry_after_seconds
+    if retry_after is None and exc.status_code == 429:
+        retry_after = DEFAULT_RATE_LIMIT_BACKOFF_SECONDS
+    if retry_after is None:
+        return
+    wait = compute_rate_limit_wait_seconds(retry_after, cap_seconds=cap_seconds)
     remaining = wait
     while remaining > 0:
         step = min(max(tick_seconds, 1.0), remaining)

@@ -51,7 +51,40 @@ Invariant: `text[start:end] == entity.text` for every entity.
 | `source` | Corpus type: `arxiv`, `youtube`, `folder`, `jsonl`, `synthetic` |
 | `gold_source` | `llm` or `synthetic` when not manual |
 | `llm_meta` | LLM run statistics (samples, votes, model id) |
-| `synthetic_meta` | Seed, engine, document index (synthetic mode) |
+| `synthetic_meta` | Synthetic mode — config snapshot, per-document seed, entity audit (see below) |
+
+### `synthetic_meta` (synthetic rows)
+
+Present when `source` / `gold_source` is synthetic. Useful for reproducibility and debugging skipped documents.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `seed` | int | Master config seed |
+| `num_documents` | int | Batch size from config |
+| `engine` | string | `procedural` or `llm` |
+| `domain` | string | Style hint (often matches document profile) |
+| `document_type` | string | Resolved genre for this row (`news_article`, `transcript`, …) |
+| `document_index` | int | 0-based index in the batch |
+| `document_seed` | int | Per-document RNG seed |
+| `planned_entity_count` | int | Entities in the plan for this row |
+| `text_engine` | string | Actual text path used (`procedural`, `llm`, `mock`, …) |
+| `text_length` | object | `{ "min_chars", "max_chars" }` from config |
+| `llm_model` | string \| null | OpenRouter model when `engine: llm` |
+| `llm_agent_mode` | string | e.g. `per_doc` (Agno session) |
+| `llm_parallelism` | int | Concurrent LLM documents |
+| `llm_provider_max_attempts` | int | API / JSON parse retries |
+| `llm_validation_max_attempts` | int | Surface / length validation retries |
+| `entity_usage` | object | Exactly-once audit (below) |
+
+**`entity_usage`** (successful rows should have empty `missing` and `duplicate_in_text`):
+
+| Field | Description |
+|-------|-------------|
+| `planned` | Number of planned surfaces |
+| `used_exactly_once` | Surfaces with exactly one literal match in `text` |
+| `missing` | Surfaces with zero occurrences |
+| `duplicate_in_text` | Surfaces with more than one occurrence |
+| `occurrence_counts` | Map surface → count in `text` |
 
 ## Allowed labels
 

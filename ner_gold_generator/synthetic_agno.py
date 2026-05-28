@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import random
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -17,11 +18,12 @@ from typing import TYPE_CHECKING, NoReturn, Protocol, cast
 if TYPE_CHECKING:
     from agno.db.sqlite import SqliteDb
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from ner_gold_generator.labeling import LlmGoldSettings
 from ner_gold_generator.llm_client import (
     describe_llm_api_error,
+    resolve_rate_limit_wait_seconds,
     strip_json_fence,
 )
 from ner_gold_generator.llm_logging import (
@@ -42,7 +44,7 @@ from ner_gold_generator.synthetic_compose import (
     wait_for_retry_async,
 )
 from ner_gold_generator.synthetic_config import SyntheticConfig
-from ner_gold_generator.synthetic_generators import PlannedEntity
+from ner_gold_generator.synthetic_generators import PlannedEntity, plan_entities_for_document
 
 try:
     from agno.agent import Agent
@@ -50,10 +52,18 @@ except ImportError:  # pragma: no cover - optional llm extra
     Agent = None  # type: ignore[misc, assignment]
 
 
-class SyntheticTextOutput(BaseModel):
-    """Structured output schema for synthetic document generation."""
+# Agno OpenAI Responses defaults map "system" -> "developer". Some OpenRouter
+# upstream providers (for example OpenInference) reject "developer" and only
+# accept standard chat roles.
+# Deterministic replan seed offset per restart (same hyperparameters, new entity sample).
+_RESTART_PLAN_SEED_STEP = 10_007
 
-    text: str = Field(..., description="Full document text")
+_OPENROUTER_ROLE_MAP = {
+    "system": "system",
+    "user": "user",
+    "assistant": "assistant",
+    "tool": "tool",
+}
 
 
 class AgnoAgentProtocol(Protocol):
@@ -181,12 +191,20 @@ def create_synthetic_agent(
 
     model_id = config.llm.model.strip()
     agent = Agent(
-        model=OpenRouterResponses(id=model_id, api_key=settings.openrouter_api_key),
+        model=OpenRouterResponses(
+            id=model_id,
+            api_key=settings.openrouter_api_key,
+            role_map=dict(_OPENROUTER_ROLE_MAP),
+        ),
         db=build_agno_sqlite_db(config, document_id=document_id),
         instructions=config.llm.system_prompt,
-        output_schema=SyntheticTextOutput,
-        add_history_to_context=True,
-        num_history_runs=config.llm.validation_max_attempts,
+        # We parse JSON ourselves to avoid provider-specific schema conversion failures.
+        parse_response=False,
+        use_json_mode=True,
+        output_schema=None,
+        # Feedback turns already include explicit issues; avoid injecting full prior runs.
+        add_history_to_context=False,
+        num_history_runs=None,
         markdown=False,
         reasoning=False,
     )
@@ -265,33 +283,24 @@ async def generate_text_with_agno_async(
     on_attempt: Callable[[int, int], None] | None = None,
     on_wait: Callable[[float, str], None] | None = None,
     on_status: Callable[[str], None] | None = None,
-) -> str:
-    """Generate synthetic document text via a per-document Agno session."""
+    doc_seed: int | None = None,
+    doc_config: SyntheticConfig | None = None,
+) -> tuple[str, list[PlannedEntity]]:
+    """Generate synthetic document text via a per-document Agno session.
+
+    When ``doc_seed`` and ``doc_config`` are set, each ``max_restarts`` trajectory
+    replans entities from scratch (new surfaces/labels, same profile hyperparameters).
+    """
     model_id = config.llm.model.strip()
     if not model_id:
         raise ValueError("engine=llm requires llm.model in the synthetic config file")
 
     provider_max = config.llm.provider_max_attempts
     validation_max = config.llm.validation_max_attempts
+    max_restarts = max(0, config.llm.max_restarts)
     call_budget = _llm_call_budget(provider_max, validation_max)
     min_chars = config.text_length.min_chars
     max_chars = config.text_length.max_chars
-
-    agent = create_synthetic_agent(
-        config,
-        settings,
-        document_id=document_id,
-        agent_factory=agent_factory,
-    )
-    session_id = document_id
-    log_agno_session_start(
-        document_id=document_id,
-        document_type=document_type,
-        model_id=model_id,
-        session_id=session_id,
-        provider_max_attempts=provider_max,
-        validation_max_attempts=validation_max,
-    )
 
     provider_failures = 0
     validation_failures = 0
@@ -299,156 +308,211 @@ async def generate_text_with_agno_async(
     last_error = "no attempts"
     last_error_kind = "provider"
     last_text: str | None = None
-    feedback_message: str | None = None
+    restart_requested = False
 
-    for turn in range(1, validation_max + 1):
-        if on_attempt is not None:
-            on_attempt(turn, validation_max)
+    current_plan = plan
+    for restart_idx in range(max_restarts + 1):
+        if restart_idx > 0:
+            if doc_config is not None and doc_seed is not None:
+                replan_rng = random.Random(doc_seed + restart_idx * _RESTART_PLAN_SEED_STEP)
+                current_plan = plan_entities_for_document(replan_rng, doc_config)
+                validation_failures = 0
+                provider_failures = 0
+                if on_status is not None:
+                    surfaces = ", ".join(e.surface for e in current_plan)
+                    on_status(
+                        f"restart {restart_idx}/{max_restarts}: replanned entities ({surfaces})"
+                    )
+            elif on_status is not None:
+                on_status(f"restart {restart_idx}/{max_restarts}: resetting generation trajectory")
+        restart_requested = False
+        feedback_message: str | None = None
+        validation_failures_this_run = 0
+        run_doc_id = document_id if restart_idx == 0 else f"{document_id}-restart-{restart_idx}"
 
-        if turn == 1:
-            message = build_synthetic_user_prompt(
-                plan,
-                config=config,
-                document_type=document_type,
-                style_description=style_description,
-            )
-            prompt_kind: str = "initial"
-        else:
-            message = feedback_message or ""
-            prompt_kind = "feedback"
-
-        log_agno_turn_start(
+        agent = create_synthetic_agent(
+            config,
+            settings,
+            document_id=run_doc_id,
+            agent_factory=agent_factory,
+        )
+        session_id = run_doc_id
+        log_agno_session_start(
             document_id=document_id,
-            turn=turn,
-            turn_budget=validation_max,
-            prompt_kind=prompt_kind,  # type: ignore[arg-type]
-            message_chars=len(message),
+            document_type=document_type,
+            model_id=model_id,
+            session_id=session_id,
+            provider_max_attempts=provider_max,
+            validation_max_attempts=validation_max,
         )
 
-        turn_succeeded = False
-        for _provider_try in range(provider_max):
-            llm_calls += 1
-            if on_status is not None:
-                on_status(f"calling Agno (turn {turn}/{validation_max})…")
-            log_llm_prompt(
-                model_id=model_id,
-                system=config.llm.system_prompt,
-                user=message,
-                temperature=config.llm.temperature,
-                engine="agno",
+        for turn in range(1, validation_max + 1):
+            if on_attempt is not None:
+                on_attempt(turn, validation_max)
+
+            if turn == 1:
+                message = build_synthetic_user_prompt(
+                    current_plan,
+                    config=config,
+                    document_type=document_type,
+                    style_description=style_description,
+                )
+                prompt_kind: str = "initial"
+            else:
+                message = feedback_message or ""
+                prompt_kind = "feedback"
+
+            log_agno_turn_start(
                 document_id=document_id,
                 turn=turn,
                 turn_budget=validation_max,
                 prompt_kind=prompt_kind,  # type: ignore[arg-type]
+                message_chars=len(message),
             )
-            started = time.perf_counter()
-            try:
-                run = await _run_agent_async(agent, message, session_id=session_id)
-                elapsed = time.perf_counter() - started
-                text, raw = parse_text_from_run(run)
-                log_llm_response(
+
+            turn_succeeded = False
+            for _provider_try in range(provider_max):
+                llm_calls += 1
+                if on_status is not None:
+                    on_status(f"calling Agno (turn {turn}/{validation_max})…")
+                log_llm_prompt(
                     model_id=model_id,
-                    raw=raw,
+                    system=config.llm.system_prompt,
+                    user=message,
+                    temperature=config.llm.temperature,
                     engine="agno",
                     document_id=document_id,
                     turn=turn,
-                    elapsed_seconds=elapsed,
-                    outcome="ok",
+                    turn_budget=validation_max,
+                    prompt_kind=prompt_kind,  # type: ignore[arg-type]
                 )
-                turn_succeeded = True
-                break
-            except Exception as exc:
-                elapsed = time.perf_counter() - started
-                msg, retryable, _ = describe_llm_api_error(exc, model_id=model_id)
-                log_llm_response(
-                    model_id=model_id,
-                    raw=msg,
-                    engine="agno",
-                    document_id=document_id,
-                    turn=turn,
-                    elapsed_seconds=elapsed,
-                    outcome="error",
-                )
-                last_error = msg
-                last_error_kind = "provider"
-                provider_failures += 1
-                log_synthetic_failure(
-                    document_id=document_id,
-                    model_id=model_id,
-                    attempt=llm_calls,
-                    call_budget=call_budget,
-                    failure_kind="provider",
-                    message=msg,
-                    plan=plan,
-                    agent_mode="per_doc",
-                    turn=turn,
-                    document_type=document_type,
-                )
-                if not retryable or provider_failures >= provider_max:
+                started = time.perf_counter()
+                try:
+                    run = await _run_agent_async(agent, message, session_id=session_id)
+                    elapsed = time.perf_counter() - started
+                    text, raw = parse_text_from_run(run)
+                    log_llm_response(
+                        model_id=model_id,
+                        raw=raw,
+                        engine="agno",
+                        document_id=document_id,
+                        turn=turn,
+                        elapsed_seconds=elapsed,
+                        outcome="ok",
+                    )
+                    turn_succeeded = True
                     break
-                from ner_gold_generator.llm_client import (
-                    LlmRequestError,
-                    retry_after_seconds_from_error,
-                )
+                except Exception as exc:
+                    elapsed = time.perf_counter() - started
+                    msg, retryable, status_code = describe_llm_api_error(exc, model_id=model_id)
+                    log_llm_response(
+                        model_id=model_id,
+                        raw=msg,
+                        engine="agno",
+                        document_id=document_id,
+                        turn=turn,
+                        elapsed_seconds=elapsed,
+                        outcome="error",
+                    )
+                    last_error = msg
+                    last_error_kind = "provider"
+                    provider_failures += 1
+                    log_synthetic_failure(
+                        document_id=document_id,
+                        model_id=model_id,
+                        attempt=llm_calls,
+                        call_budget=call_budget,
+                        failure_kind="provider",
+                        message=msg,
+                        plan=current_plan,
+                        agent_mode="per_doc",
+                        turn=turn,
+                        document_type=document_type,
+                    )
+                    if not retryable or provider_failures >= provider_max:
+                        break
+                    from ner_gold_generator.llm_client import LlmRequestError
 
-                wrapped = LlmRequestError(
-                    msg,
-                    retryable=True,
-                    model_id=model_id,
-                    retry_after_seconds=retry_after_seconds_from_error(exc),
-                )
-                await wait_for_retry_async(wrapped, on_wait=on_wait)
-                continue
+                    wait_seconds = resolve_rate_limit_wait_seconds(exc)
+                    wrapped = LlmRequestError(
+                        msg,
+                        retryable=True,
+                        model_id=model_id,
+                        status_code=status_code,
+                        retry_after_seconds=wait_seconds,
+                    )
+                    if on_status is not None and wait_seconds is not None:
+                        on_status(f"rate limited — waiting ~{wait_seconds:.0f}s")
+                    await wait_for_retry_async(wrapped, on_wait=on_wait)
+                    continue
 
-        if not turn_succeeded:
-            break
+            if not turn_succeeded:
+                break
 
-        last_text = text
-        issues = collect_validation_issues(
-            text,
-            plan,
-            min_chars=min_chars,
-            max_chars=max_chars,
-        )
-        if not issues:
-            audit = audit_plan_entity_usage(text, plan)
-            log_agno_turn_success(
-                document_id=document_id,
-                turn=turn,
-                text_len=len(text),
-                used_exactly_once=audit.used_exactly_once,
-                planned=audit.planned,
+            last_text = text
+            issues = collect_validation_issues(
+                text,
+                current_plan,
+                min_chars=min_chars,
+                max_chars=max_chars,
             )
-            return text
+            if not issues:
+                audit = audit_plan_entity_usage(text, current_plan)
+                log_agno_turn_success(
+                    document_id=document_id,
+                    turn=turn,
+                    text_len=len(text),
+                    used_exactly_once=audit.used_exactly_once,
+                    planned=audit.planned,
+                )
+                return text, current_plan
 
-        last_error = "; ".join(issues)
-        last_error_kind = "validation"
-        validation_failures += 1
-        audit = audit_plan_entity_usage(text, plan)
-        log_synthetic_failure(
-            document_id=document_id,
-            model_id=model_id,
-            attempt=llm_calls,
-            call_budget=call_budget,
-            failure_kind="validation",
-            message=last_error,
-            text=text,
-            plan=plan,
-            audit=audit,
-            agent_mode="per_doc",
-            turn=turn,
-            document_type=document_type,
-        )
-        if validation_failures >= validation_max:
+            last_error = "; ".join(issues)
+            last_error_kind = "validation"
+            validation_failures += 1
+            validation_failures_this_run += 1
+            audit = audit_plan_entity_usage(text, current_plan)
+            log_synthetic_failure(
+                document_id=document_id,
+                model_id=model_id,
+                attempt=llm_calls,
+                call_budget=call_budget,
+                failure_kind="validation",
+                message=last_error,
+                text=text,
+                plan=current_plan,
+                audit=audit,
+                agent_mode="per_doc",
+                turn=turn,
+                document_type=document_type,
+            )
+            if validation_failures_this_run >= validation_max:
+                if restart_idx < max_restarts:
+                    restart_requested = True
+                    if on_status is not None:
+                        on_status(
+                            "validation attempts exhausted; "
+                            + (
+                                "replanning entities"
+                                if doc_config is not None and doc_seed is not None
+                                else "restarting trajectory"
+                            )
+                        )
+                break
+            feedback_message = build_validation_feedback(
+                issues,
+                config=config,
+                min_chars=min_chars,
+                max_chars=max_chars,
+                document_type=document_type,
+            )
+            if on_status is not None:
+                on_status(f"retry: {last_error[:72]}")
+
+        if restart_requested:
+            continue
+        if last_error_kind != "validation":
             break
-        feedback_message = build_validation_feedback(
-            issues,
-            config=config,
-            min_chars=min_chars,
-            max_chars=max_chars,
-        )
-        if on_status is not None:
-            on_status(f"retry: {last_error[:72]}")
 
     _raise_agno_failed(
         model_id=model_id,
@@ -461,6 +525,6 @@ async def generate_text_with_agno_async(
         validation_failures=validation_failures,
         document_id=document_id,
         last_text=last_text,
-        plan=plan,
+        plan=current_plan,
         document_type=document_type,
     )

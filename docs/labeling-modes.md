@@ -28,24 +28,22 @@ Spans must appear **exactly once** in the abstract; otherwise generation fails f
 
 ### Other sources or extra arXiv spans
 
-Provide `--manual path/to/annotations.json` (YAML also supported if PyYAML is installed).
+Provide `--manual path/to/annotations.yaml` (JSON also supported for backward compatibility).
 
 Format:
 
-```json
-{
-  "arxiv-1706.03762": [
-    {"text": "network architecture, the Transformer", "label": "model"}
-  ],
-  "file-posts/intro.md": [
-    {"text": "OpenAI", "label": "organization"}
-  ]
-}
+```yaml
+arxiv-1706.03762:
+  - text: network architecture, the Transformer
+    label: model
+file-example-post.md:
+  - text: OpenAI
+    label: organization
 ```
 
 Keys may be full document ids (`arxiv-…`, `file-…`, or jsonl `id`). Bare arXiv ids (`1706.03762`) are accepted for arXiv source.
 
-See [examples/manual-sample.json](examples/manual-sample.json).
+See [examples/manual-sample.yaml](examples/manual-sample.yaml).
 
 Documents without manual entries are **skipped** (logged when progress is enabled).
 

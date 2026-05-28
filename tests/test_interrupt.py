@@ -149,8 +149,9 @@ def test_build_examples_synthetic_llm_parallel_interrupt(monkeypatch: pytest.Mon
     )
     monkeypatch.setattr(syn_mod, "build_async_chat_client", lambda *_a, **_k: MagicMock())
 
-    async def _fast_llm_async(plan: list, cfg: object, **_kwargs: object) -> str:
-        return assemble_mock_llm_text(plan, cfg)  # type: ignore[arg-type]
+    async def _fast_llm_async(plan: list, cfg: object, **_kwargs: object) -> tuple[str, list]:
+        text = assemble_mock_llm_text(plan, cfg)  # type: ignore[arg-type]
+        return text, plan
 
     monkeypatch.setattr(syn_mod, "generate_text_with_llm_async", _fast_llm_async)
 

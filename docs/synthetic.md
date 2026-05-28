@@ -8,7 +8,7 @@ Generate NER benchmark gold JSONL without external corpora. The pipeline is **en
 
 ```bash
 uv run build-gold --source synthetic \
-  --synthetic-config configs/synthetic_smoke.json \
+  --synthetic-config configs/synthetic_smoke.yaml \
   --output output/synthetic_gold.jsonl
 ```
 
@@ -17,7 +17,7 @@ uv run build-gold --source synthetic \
 ```bash
 # Requires OPENROUTER_API_KEY in .env and: uv sync --extra llm
 uv run build-gold --source synthetic \
-  --synthetic-config configs/synthetic_llm.json \
+  --synthetic-config configs/synthetic_llm.yaml \
   --output output/synthetic_gold_llm.jsonl
 ```
 
@@ -38,13 +38,14 @@ Use `--mock` only for CI/tests; it skips the API and uses template assembly even
 
 ## Config directory layout
 
-Paths in synthetic JSON are resolved **relative to the config file** (usually `configs/`):
+Paths in synthetic YAML are resolved **relative to the config file** (usually `configs/`):
 
 ```
 configs/
-  synthetic_smoke.json
-  synthetic_llm.json
-  synthetic_mixed.json
+  synthetic_reference.yaml      # annotated template (all options)
+  synthetic_smoke.yaml
+  synthetic_llm.yaml
+  synthetic_mixed.yaml
   prompts/                          # LLM templates (not inlined in Python)
     synthetic_llm_system_prompt.txt
     synthetic_llm_user_prompt.txt
@@ -60,7 +61,9 @@ configs/
 
 At load time, `load_synthetic_config` reads `llm.prompt_file`, `user_prompt_file`, and `feedback_prompt_file` from disk and stores the text in `llm.system_prompt`, `user_prompt`, and `feedback_prompt`.
 
-## Config file (YAML or JSON)
+## Config file (YAML)
+
+Synthetic batch specs live under `configs/*.yaml`. JSON is still accepted by `load_synthetic_config` for backward compatibility.
 
 | Field | Description |
 | ------- | ----------- |
@@ -78,9 +81,12 @@ At load time, `load_synthetic_config` reads `llm.prompt_file`, `user_prompt_file
 | `llm.max_attempts` | Legacy retry knob (fallback for both retry classes) |
 | `llm.provider_max_attempts` | Retries for provider/API failures (timeouts, 429, transient errors) |
 | `llm.validation_max_attempts` | Retries for non-compliant outputs (missing/duplicate planned surfaces, empty text) |
+| `llm.max_restarts` | After validation turns are exhausted, replan entities from scratch (new surfaces, same profile hyperparameters) and start a fresh Agno session; default `1` |
+| `llm.document_log_dir` | Directory for per-document LLM traces (`logs/synthetic-00000001-00016.log`, etc.); path relative to the synthetic config file. CLI: `--document-log-dir logs` |
 | `llm.temperature` | Sampling temperature for LLM engine |
 | `llm.timeout_seconds` | Per-request HTTP timeout (default `120`; lower if a run seems stuck) |
 | `llm.request_delay_seconds` | Pause before retries (helps free-tier rate limits) |
+| *(automatic)* | On HTTP 429, backoff uses OpenRouter `retry_after_seconds`, `Retry-After`, or `X-RateLimit-Reset` (up to 1h wait) before retrying |
 | `llm.parallelism` | Number of concurrent synthetic LLM document calls (default `3`; use `1` for sequential, no thread pool) |
 | `llm.agent_mode` | `per_doc` (default): Agno session per document with in-session feedback turns; `stateless`: one-shot OpenRouter JSON loop per attempt |
 | `llm.agno_db_path` | SQLite path for Agno session history (`:memory:` default; one DB per document build) |
@@ -110,7 +116,7 @@ Omitted top-level fields use **code defaults** from `SyntheticConfig` (`ner_gold
 | `llm.parallelism` | `3` |
 | `document_profiles_dir` | `document_profiles` (next to the config file) |
 
-A minimal LLM config such as `configs/synthetic_mixed.json` only sets `seed`, `num_documents`, `engine`, `document_types`, `entities_per_document`, and `llm.*` prompt paths. Everything else above still applies until a **document profile** overrides it (see below).
+A minimal LLM config such as `configs/synthetic_mixed.yaml` only sets `seed`, `num_documents`, `engine`, `document_types`, `entities_per_document`, and `llm.*` prompt paths. Everything else above still applies until a **document profile** overrides it (see below).
 
 ### Document profiles (multi-genre)
 
@@ -121,15 +127,15 @@ Profiles under `configs/document_profiles/` override style, templates, lexicon, 
 | `scientific_abstract` | Paper-style abstracts |
 | `news_article` | News wire tone |
 | `blog_post` | Informal blog |
-| `transcript` | Spoken/interview style |
+| `transcript` | Spoken/interview style (`Host:`/`Guest:` turn labels; planned names are full names used once, not repeated as speaker prefixes) |
 
-Example configs: `configs/synthetic_news.json`, `synthetic_blog.json`, `synthetic_transcript.json`, `synthetic_mixed.json`. Each output row sets `synthetic_meta.document_type` to the profile used for that document.
+Example configs: `configs/synthetic_news.yaml`, `synthetic_blog.yaml`, `synthetic_transcript.yaml`, `synthetic_mixed.yaml`. Each output row sets `synthetic_meta.document_type` to the profile used for that document.
 
-**Merge rules** (`merge_config_for_profile`): for each document, the sampled profile is merged into the base JSON config:
+**Merge rules** (`merge_config_for_profile`): for each document, the sampled profile is merged into the base YAML config:
 
 | Setting | Precedence |
 |---------|------------|
-| `text_length` | Profile value if present, else base JSON / defaults |
+| `text_length` | Profile value if present, else base YAML / defaults |
 | `label_weights` | Profile if non-empty, else base |
 | `lexicon` | Base lexicon, then profile keys merged on top |
 | `templates` | Profile templates if any, else base; procedural engine uses these |
@@ -137,7 +143,7 @@ Example configs: `configs/synthetic_news.json`, `synthetic_blog.json`, `syntheti
 
 For **`engine: llm`**, profile `templates` are **not** sent to the model; the LLM writes prose from `style_description` and the shared prompts in `configs/prompts/`. Length and entity sampling still follow the merged config (e.g. `news_article` sets 300–1200 chars while the global default is 200–800).
 
-**Example — `synthetic_mixed.json`:** 30 documents with a 40/30/30 mix of `news_article`, `blog_post`, and `transcript`; five entities per document (`entities_per_document.fixed: 5`); Agno `per_doc` sessions; shared system/user/feedback prompts. No `text_length` in the JSON — each document uses the profile’s bounds when the profile defines `text_length` (news: 300–1200), otherwise 200–800.
+**Example — `synthetic_mixed.yaml`:** 30 documents with a 40/30/30 mix of `news_article`, `blog_post`, and `transcript`; five entities per document (`entities_per_document.fixed: 5`); Agno `per_doc` sessions; shared system/user/feedback prompts. No `text_length` in the YAML — each document uses the profile’s bounds when the profile defines `text_length` (news: 300–1200), otherwise 200–800.
 
 ### Logging (`gold.log`)
 
@@ -168,7 +174,7 @@ Concurrency safety notes:
 - On interrupt, pending asyncio tasks are cancelled.
 - Per-document LLM failures after all retries are skipped; other documents still complete.
 
-Example: `configs/synthetic_smoke.json`.
+Example: `configs/synthetic_smoke.yaml`.
 
 ## Labels
 
@@ -185,7 +191,7 @@ from pathlib import Path
 from ner_gold_generator.synthetic import build_examples_from_config_path
 
 examples = build_examples_from_config_path(
-    Path("configs/synthetic_smoke.json"),
+    Path("configs/synthetic_smoke.yaml"),
     mock=True,
 )
 ```

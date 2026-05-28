@@ -1,4 +1,11 @@
-"""Shared stderr logger setup for CLI debug output."""
+"""Shared logging setup for CLI progress and LLM trace files.
+
+Defaults:
+
+- Structured logs to ``gold.log`` (override with ``NER_GOLD_LOG_FILE``).
+- No stderr log noise unless ``NER_GOLD_LOG_STDERR=1``.
+- Level from ``NER_GOLD_LOG_LEVEL`` (``INFO`` default; ``DEBUG`` for full prompts).
+"""
 
 from __future__ import annotations
 

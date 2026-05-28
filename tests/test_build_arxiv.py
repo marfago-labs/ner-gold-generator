@@ -242,7 +242,7 @@ def test_load_project_env_reads_file(tmp_path: Path) -> None:
 def test_main_prints_statistics_on_stderr(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.json"
+    smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.yaml"
     out = tmp_path / "gold.jsonl"
     code = build_gold_mod.main(
         [
@@ -420,7 +420,7 @@ def test_main_verbose_prints_step_logs(
 
     llm_logging_mod._LOGGER.handlers.clear()
     llm_logging_mod._LOGGER = llm_logging_mod.get_logger(llm_logging_mod.__name__)
-    smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.json"
+    smoke = Path(__file__).resolve().parent.parent / "configs" / "synthetic_smoke.yaml"
     out = tmp_path / "gold.jsonl"
     code = build_gold_mod.main(
         [

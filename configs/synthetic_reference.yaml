@@ -1,0 +1,104 @@
+# Synthetic gold batch spec — annotated reference (see docs/synthetic.md)
+# Copy and edit; runnable as-is (procedural, no API). For LLM runs, set engine: llm
+# and uncomment the llm block at the bottom.
+
+# --- Core ---
+seed: 42 # master RNG; same seed => same entity plans
+num_documents: 1 # rows to emit
+engine: procedural # procedural (templates) | llm (OpenRouter prose)
+domain: scientific_abstract # style hint; default genre when document_type omitted
+# document_type: news_article # single genre for every document
+# document_types: # weighted mix; sampled per document (overrides document_type when set)
+#   - type: news_article
+#     weight: 0.4
+#   - type: blog_post
+#     weight: 0.3
+#   - type: transcript
+#     weight: 0.3
+document_profiles_dir: document_profiles # YAML profiles relative to this file
+
+# --- Text length (inclusive char bounds; document profile may override) ---
+text_length:
+  min_chars: 200
+  max_chars: 800
+
+# --- Planned entities per document ---
+entities_per_document:
+  distribution: uniform # uniform | fixed | poisson
+  min: 3 # lower bound (uniform / poisson)
+  max: 8 # upper bound (uniform / poisson)
+  # fixed: 5 # exact count when distribution: fixed
+  # lambda: 6.0 # Poisson mean when distribution: poisson
+
+# --- Label sampling weights (normalized; omit for built-in scientific mix) ---
+# label_weights:
+#   model: 0.15
+#   dataset: 0.12
+#   benchmark: 0.1
+#   metric: 0.12
+#   organization: 0.1
+#   method: 0.08
+#   number: 0.08
+#   date: 0.06
+#   year: 0.05
+#   percentage: 0.05
+#   currency: 0.04
+#   person: 0.03
+#   location: 0.02
+
+# --- Lexicon surfaces (merged with profile lexicon; used for lexical labels) ---
+# Lexical labels: model, dataset, benchmark, organization, method, person,
+# location, acronym, miscellaneous. metric also uses lexicon when present.
+# lexicon:
+#   model: [Transformer, BERT, GPT-3]
+#   dataset: [ImageNet, GLUE, SQuAD]
+#   organization: [OpenAI, Google, Meta]
+
+# --- Structured generators (date, year, number, percentage, currency, arxiv_id) ---
+# generators:
+#   date:
+#     formats: ["%d/%m/%Y", "%d %b %Y", "%B %d, %Y"]
+#   year:
+#     year_min: 2015
+#     year_max: 2026
+#   number:
+#     min: 0.1 # alias value_min
+#     max: 99.9 # alias value_max
+#     decimal_separators: [".", ","]
+#     thousands_separators: [",", ".", ""]
+#   percentage:
+#     min: 0.1
+#     max: 99.9
+#   currency:
+#     codes: [USD, EUR, GBP] # alias currency_codes
+#     symbols: ["$", "€", "£"] # alias currency_symbols
+#     min: 0.1
+#     max: 99.9
+#   arxiv_id:
+#     year_min: 2015
+#     year_max: 2026
+
+# --- Procedural templates only (engine: procedural); use {e0}, {e1}, ... placeholders ---
+# templates:
+#   - "We propose {e0} and evaluate it on {e1}, achieving {e2} on the {e3} benchmark."
+
+# --- LLM engine (required when engine: llm; needs OPENROUTER_API_KEY) ---
+# llm:
+#   model: openai/gpt-oss-120b:free # OpenRouter model id
+#   prompt_file: prompts/synthetic_llm_system_prompt.txt
+#   user_prompt_file: prompts/synthetic_llm_user_prompt.txt
+#   feedback_prompt_file: prompts/synthetic_llm_feedback_prompt.txt
+#   # system_prompt: "" # inline system prompt (instead of prompt_file)
+#   # user_prompt: "" # inline user template (instead of user_prompt_file)
+#   # feedback_prompt: "" # inline feedback template (instead of feedback_prompt_file)
+#   max_attempts: 3 # legacy; sets both retry budgets when split knobs omitted
+#   provider_max_attempts: 3 # API / JSON parse retries
+#   validation_max_attempts: 3 # missing/duplicate surface or length retries
+#   max_restarts: 1 # replan entities + fresh Agno session after validation exhausted
+#   temperature: 0.4
+#   timeout_seconds: 120 # per HTTP request
+#   request_delay_seconds: 0 # pause before retries (rate limits)
+#   parallelism: 3 # concurrent documents (1 = sequential)
+#   agent_mode: per_doc # per_doc (Agno session) | stateless (one-shot loop)
+#   agno_db_path: "" # SQLite path for Agno history (:memory: default)
+#   document_log_dir: logs_tmp # per-document trace files (or CLI --document-log-dir)

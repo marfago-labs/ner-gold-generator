@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pytest
@@ -69,3 +70,57 @@ def test_log_synthetic_failure_includes_length(
     text = log_path.read_text(encoding="utf-8")
     assert "document_type=news_article" in text
     assert "text length: 2 chars" in text
+
+
+def test_document_log_dir_writes_per_document_file(tmp_path: Path) -> None:
+    log_dir = tmp_path / "logs"
+    llm_logging.configure_document_log_dir(log_dir)
+    try:
+        llm_logging.log_llm_prompt(
+            model_id="m",
+            system="system text",
+            user="user text",
+            temperature=0.2,
+            engine="agno",
+            document_id="synthetic-00000001-00016",
+            turn=1,
+            turn_budget=3,
+        )
+        llm_logging.log_llm_response(
+            model_id="m",
+            raw='{"text": "hello"}',
+            engine="agno",
+            document_id="synthetic-00000001-00016",
+            turn=1,
+        )
+        llm_logging.log_synthetic_failure(
+            document_id="synthetic-00000001-00016",
+            model_id="m",
+            attempt=2,
+            call_budget=3,
+            failure_kind="validation",
+            message="missing surface",
+            text="hello",
+        )
+        doc_log = log_dir / "synthetic-00000001-00016.log"
+        assert doc_log.is_file()
+        text = doc_log.read_text(encoding="utf-8")
+        assert "system text" in text
+        assert "user text" in text
+        assert '{"text": "hello"}' in text
+        assert "missing surface" in text
+    finally:
+        llm_logging.configure_document_log_dir(None)
+
+
+def test_get_logger_returns_existing_logger_with_handlers() -> None:
+    from ner_gold_generator.logger import get_logger
+
+    name = "ner_gold_generator.test_logger_cache"
+    cached = logging.getLogger(name)
+    cached.handlers.clear()
+    first = get_logger(name)
+    handler_count = len(first.handlers)
+    second = get_logger(name)
+    assert first is second
+    assert len(second.handlers) == handler_count

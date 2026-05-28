@@ -193,3 +193,9 @@ def test_summarize_manual_rows() -> None:
     assert any("documents: 1" in line for line in lines)
     assert any("organization=1" in line for line in lines)
     assert not any("synthetic seed" in line for line in lines)
+
+
+def test_int_stats_empty_list() -> None:
+    from ner_gold_generator.build_stats import _int_stats
+
+    assert _int_stats([]) == (0, 0.0, 0)
