@@ -51,6 +51,7 @@ def _format_date(d: date, fmt: str) -> str:
 
 
 def generate_date_surface(rng: random.Random, config: SyntheticConfig) -> str:
+    """Sample a formatted calendar date string from ``generators.date`` options."""
     cfg = _gen_cfg(config, "date")
     d = _random_date(rng, cfg)
     formats = cfg.formats or (
@@ -63,6 +64,7 @@ def generate_date_surface(rng: random.Random, config: SyntheticConfig) -> str:
 
 
 def generate_year_surface(rng: random.Random, config: SyntheticConfig) -> str:
+    """Sample a four-digit year in the configured range."""
     cfg = _gen_cfg(config, "year")
     return str(rng.randint(cfg.year_min, cfg.year_max))
 
@@ -92,12 +94,14 @@ def _format_number_value(
 
 
 def generate_number_surface(rng: random.Random, config: SyntheticConfig) -> str:
+    """Sample a numeric literal with locale-style separators."""
     cfg = _gen_cfg(config, "number")
     value = rng.uniform(cfg.value_min, cfg.value_max)
     return _format_number_value(value, rng, cfg)
 
 
 def generate_percentage_surface(rng: random.Random, config: SyntheticConfig) -> str:
+    """Sample a percentage string (numeric body + ``%``)."""
     cfg = _gen_cfg(config, "percentage")
     value = rng.uniform(cfg.value_min, cfg.value_max)
     body = _format_number_value(value, rng, cfg)
@@ -105,6 +109,7 @@ def generate_percentage_surface(rng: random.Random, config: SyntheticConfig) -> 
 
 
 def generate_currency_surface(rng: random.Random, config: SyntheticConfig) -> str:
+    """Sample a currency amount (symbol, code, or combined formats)."""
     cfg = _gen_cfg(config, "currency")
     value = rng.uniform(cfg.value_min, cfg.value_max * 100)
     amount = _format_number_value(value, rng, cfg)
@@ -119,6 +124,7 @@ def generate_currency_surface(rng: random.Random, config: SyntheticConfig) -> st
 
 
 def generate_arxiv_id_surface(rng: random.Random, config: SyntheticConfig) -> str:
+    """Sample an arXiv-style identifier string."""
     cfg = _gen_cfg(config, "arxiv_id")
     year = rng.randint(cfg.year_min, cfg.year_max) % 100
     num = rng.randint(10000, 99999)
@@ -131,12 +137,20 @@ def generate_arxiv_id_surface(rng: random.Random, config: SyntheticConfig) -> st
 
 
 def generate_metric_surface(rng: random.Random, config: SyntheticConfig) -> str:
+    """Sample a metric phrase (often from lexicon, else synthetic value + unit)."""
     lex = config.lexicon.get("metric", ())
     if lex and rng.random() < 0.6:
         return rng.choice(lex)
     value = rng.uniform(1.0, 99.9)
     unit = rng.choice(("BLEU", "F1", "accuracy", "ROUGE-L"))
     return f"{value:.1f} {unit}"
+
+
+def _surface_conflicts_with_used(candidate: str, used: set[str]) -> bool:
+    """True if *candidate* equals or overlaps any surface in *used* (substring clash)."""
+    if candidate in used:
+        return True
+    return any(candidate in other or other in candidate for other in used)
 
 
 def generate_lexical_surface(
@@ -149,7 +163,7 @@ def generate_lexical_surface(
     """Sample a lexical entity surface from lexicon, avoiding *used*."""
     entries = config.lexicon.get(label, ())
     if entries:
-        candidates = [e for e in entries if e not in used]
+        candidates = [e for e in entries if not _surface_conflicts_with_used(e, used)]
         if candidates:
             return rng.choice(candidates)
     fallback = {
@@ -164,12 +178,14 @@ def generate_lexical_surface(
         "miscellaneous": "baseline",
     }
     base = fallback.get(label, "Entity")
-    suffix = 1
-    candidate = base
-    while candidate in used:
-        candidate = f"{base}-{suffix}"
-        suffix += 1
-    return candidate
+    if not _surface_conflicts_with_used(base, used):
+        return base
+    for _ in range(64):
+        token = rng.randint(10_000, 99_999)
+        candidate = f"{label}-{token}"
+        if not _surface_conflicts_with_used(candidate, used):
+            return candidate
+    raise RuntimeError(f"Could not generate non-overlapping surface for label {label!r}")
 
 
 def generate_surface_for_label(
@@ -201,7 +217,7 @@ def generate_surface_for_label(
             surface = generate_metric_surface(rng, config)
         else:
             surface = generate_lexical_surface(label, rng, config, used=used)
-        if surface and surface not in used:
+        if surface and not _surface_conflicts_with_used(surface, used):
             return surface
     raise RuntimeError(f"Could not generate unique surface for label {label!r}")
 

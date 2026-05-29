@@ -774,9 +774,13 @@ def test_llm_engine_with_settings_mock_llm() -> None:
 
 def test_lexical_collision_suffix() -> None:
     config = parse_synthetic_config_dict({"lexicon": {"model": []}})
-    used = {"NeuralNet-X", "NeuralNet-X-1", "NeuralNet-X-2"}
+    used = {"OtherModel-A", "OtherModel-B", "OtherModel-C"}
     surface = generate_surface_for_label("model", random.Random(0), config, used=used)
-    assert surface == "NeuralNet-X-3"
+    assert surface == "NeuralNet-X"
+    used_with_base = {"NeuralNet-X"}
+    surface2 = generate_surface_for_label("model", random.Random(1), config, used=used_with_base)
+    assert surface2 not in used_with_base
+    assert all(surface2 not in other and other not in surface2 for other in used_with_base)
 
 
 def test_arxiv_and_currency_variants() -> None:
