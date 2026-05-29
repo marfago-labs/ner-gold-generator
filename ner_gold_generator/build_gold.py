@@ -30,13 +30,14 @@ from ner_gold_generator.labeling import (
 )
 from ner_gold_generator.llm_client import LlmRequestError
 from ner_gold_generator.manual import load_manual_annotations, resolve_manual_spans
+from ner_gold_generator.paths import default_output_path
 from ner_gold_generator.progress import Progress
 from ner_gold_generator.sources import SourceDocument, default_input_dir, load_documents
 from ner_gold_generator.synthetic import build_examples_from_config_path
 from ner_gold_generator.validate import index_unique_span
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_OUTPUT = _REPO_ROOT.parent / "ner-detector" / "benchmark" / "datasets" / "arxiv_gold.jsonl"
+_DEFAULT_OUTPUT = default_output_path("arxiv_gold.jsonl")
 
 
 def _index_entity(text: str, surface: str) -> tuple[int, int]:

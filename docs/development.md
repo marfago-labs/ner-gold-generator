@@ -51,6 +51,18 @@ uv run pre-commit run --all-files
 
 `ruff` hook uses `--fix` on commit; CI runs check + format `--check` without modifying files.
 
+## Helper scripts
+
+| Script | Purpose |
+|--------|---------|
+| [`scripts/list_openrouter_free_models.py`](../scripts/list_openrouter_free_models.py) | List OpenRouter models with \$0 prompt/completion pricing (no API key) |
+
+```bash
+uv run python scripts/list_openrouter_free_models.py
+```
+
+Installed CLIs (`build-gold`, `build-arxiv-gold`) are defined in `pyproject.toml` and documented in [cli.md](cli.md).
+
 ## Secret scanning (gitleaks)
 
 Hardcoded API keys and tokens are blocked by **[Gitleaks](https://github.com/gitleaks/gitleaks)**:

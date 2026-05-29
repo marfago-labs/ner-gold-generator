@@ -9,7 +9,7 @@ Generate NER benchmark gold JSONL without external corpora. The pipeline is **en
 ```bash
 uv run build-gold --source synthetic \
   --synthetic-config configs/synthetic_smoke.yaml \
-  --output output/synthetic_gold.jsonl
+  --output ../ner-dataset/datasets/synthetic_gold.jsonl
 ```
 
 **LLM prose + deterministic entity plan (recommended for realistic text):**
@@ -18,7 +18,7 @@ uv run build-gold --source synthetic \
 # Requires OPENROUTER_API_KEY in .env and: uv sync --extra llm
 uv run build-gold --source synthetic \
   --synthetic-config configs/synthetic_llm.yaml \
-  --output output/synthetic_gold_llm.jsonl
+  --output ../ner-dataset/datasets/synthetic_gold_llm.jsonl
 ```
 
 Flow:
@@ -64,6 +64,8 @@ At load time, `load_synthetic_config` reads `llm.prompt_file`, `user_prompt_file
 ## Config file (YAML)
 
 Synthetic batch specs live under `configs/*.yaml`. JSON is still accepted by `load_synthetic_config` for backward compatibility.
+
+**Annotated reference:** [`configs/synthetic_reference.yaml`](../configs/synthetic_reference.yaml) lists every option with brief comments. Example batches (`synthetic_smoke.yaml`, `synthetic_mixed.yaml`, …) show active values plus commented alternatives.
 
 | Field | Description |
 | ------- | ----------- |

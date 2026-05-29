@@ -113,7 +113,7 @@ Logging: aggregate **`gold.log`**; optional per-document files via `llm.document
 | Synthetic spans | Pre-planned surfaces; validate exactly-once before export |
 | Transcript genre | Role labels (`Host:`/`Guest:`) separate from planned entity names |
 | Config format | YAML under `configs/`; PyYAML is a core dependency |
-| arXiv manual gold | Checked into ner-detector; regenerated from `manual_entities.py` |
+| arXiv manual gold | Default output `ner-dataset/datasets/arxiv_gold.jsonl`; shipped copy in ner-detector for CI |
 | Optional LLM dep | `openai`, `agno`, etc. only in `llm` extra |
 | Downstream | ner-detector ignores unknown JSON fields |
 
@@ -122,4 +122,5 @@ Logging: aggregate **`gold.log`**; optional per-document files via `llm.document
 | Repo | Role |
 |------|------|
 | [text-compressor](https://github.com/marfago-labs/text-compressor) | Raw arXiv/YouTube JSON under `data/raw/` |
+| [ner-dataset](https://github.com/marfago-labs/ner-dataset) | Canonical gold JSONL output directory |
 | [ner-detector](https://github.com/marfago-labs/ner-detector) | Consumes gold JSONL for backend benchmarks |

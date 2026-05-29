@@ -5,7 +5,7 @@
 | Entry point | Implementation |
 |-------------|----------------|
 | `uv run build-gold` | `ner_gold_generator.build_gold:main` |
-| `uv run build-arxiv-gold` | Wrapper: forces `--source arxiv`, default output to ner-detector `arxiv_gold.jsonl`; maps `--arxiv-dir` → `--input` |
+| `uv run build-arxiv-gold` | Wrapper: forces `--source arxiv`, default output to `../ner-dataset/datasets/arxiv_gold.jsonl`; maps `--arxiv-dir` → `--input` |
 
 ```bash
 uv run build-gold --help
@@ -30,7 +30,7 @@ uv pip install --force-reinstall jiter
 | `--source` | `arxiv` | `arxiv`, `youtube`, `folder`, `jsonl`, `synthetic` |
 | `--synthetic-config` | — | YAML spec (required for `synthetic`; JSON still accepted; see [synthetic.md](synthetic.md)) |
 | `--input` | *(source default)* | Input directory or JSONL file path |
-| `--output` | `../ner-detector/benchmark/datasets/arxiv_gold.jsonl` | Output JSONL path |
+| `--output` | `../ner-dataset/datasets/arxiv_gold.jsonl` | Output JSONL path |
 | `--mode` | `manual` | `manual` or `llm` |
 | `--manual` | — | JSON/YAML manual annotations (required for manual non-arxiv) |
 | `--text-field` | — | JSON/JSONL field name for body text |
@@ -73,30 +73,30 @@ Press **Ctrl+C** during a build to stop gracefully: in-flight synthetic LLM task
 ## Common recipes
 
 ```bash
-# Default arXiv manual gold for ner-detector
+# Default arXiv manual gold → ner-dataset (ner-detector loads it automatically)
 uv run build-arxiv-gold
 
 # arXiv LLM with stricter consensus
 uv run build-gold --source arxiv --mode llm --samples 5 --min-votes 3 \
-  --output output/arxiv_gold_llm.jsonl
+  --output ../ner-dataset/datasets/arxiv_gold_llm.jsonl
 
 # YouTube, mock, one video
 uv run build-gold --source youtube --mode llm --mock --limit 1 \
-  --output output/yt.jsonl
+  --output ../ner-dataset/datasets/yt.jsonl
 
 # Markdown folder only
 uv run build-gold --source folder --input ./content --glob "*.md" \
   --manual docs/examples/manual-sample.yaml --mode manual \
-  --output output/md_gold.jsonl
+  --output ../ner-dataset/datasets/md_gold.jsonl
 
 # Import JSONL corpus + LLM
 uv run build-gold --source jsonl --input corpus.jsonl --mode llm \
-  --output output/corpus_gold.jsonl
+  --output ../ner-dataset/datasets/corpus_gold.jsonl
 
 # Synthetic procedural gold (no corpus, no API)
 uv run build-gold --source synthetic \
   --synthetic-config configs/synthetic_smoke.yaml \
-  --output output/synthetic_gold.jsonl
+  --output ../ner-dataset/datasets/synthetic_gold.jsonl
 ```
 
 ## Python API

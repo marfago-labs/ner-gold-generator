@@ -24,6 +24,17 @@ When `LLM_GOLD_*_PROMPT_FILE` is unset, prompts load from **`configs/prompts/lab
 
 Synthetic `engine: llm` uses a separate trio under the same directory (`synthetic_llm_*.txt`), referenced from each `configs/synthetic_*.yaml` via `llm.prompt_file`, `user_prompt_file`, and `feedback_prompt_file` (paths relative to that YAML file). See [synthetic.md](synthetic.md).
 
+## Runtime artifacts (do not commit)
+
+| Path | Contents |
+|------|----------|
+| `gold.log` | LLM prompts/responses and synthetic failures (gitignored) |
+| `output/` | Local scratch JSONL only (gitignored); default gold writes to sibling `ner-dataset/datasets/` |
+| `configs/logs_tmp/` or `--document-log-dir` | Per-document LLM traces when enabled (gitignored) |
+| `*.db` under cwd | Agno SQLite session files when `llm.agno_db_path` is set (gitignored) |
+
+Never commit `.env`, log files, or trace directories — they may contain API traffic or corpus text.
+
 ## Synthetic / build logging
 
 | Variable | Default | Description |
@@ -51,11 +62,17 @@ If unset, defaults assume:
 
 ## Output path
 
-There is no env var for output; use `--output`. Default output path is set in code to:
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `NER_DATASET_DIR` | `../ner-dataset/datasets` | Directory for gold JSONL ([ner-dataset](https://github.com/marfago-labs/ner-dataset) sibling repo) |
 
-`../ner-detector/benchmark/datasets/arxiv_gold.jsonl`
+Override per run with `--output`. When omitted, `build-gold` and `build-arxiv-gold` default to:
 
-Only when using `build-gold` without `--output`. `build-arxiv-gold` always applies the same default.
+`../ner-dataset/datasets/arxiv_gold.jsonl`
+
+(relative to the `ner-gold-generator` repo root). Parent directories are created on write.
+
+**ner-detector** resolves `load_dataset(name)` from `NER_DATASET_DIR`, then `../ner-dataset/datasets/`, then shipped `benchmark/datasets/`.
 
 ## Example `.env`
 

@@ -151,6 +151,7 @@ def log_agno_session_start(
     provider_max_attempts: int,
     validation_max_attempts: int,
 ) -> None:
+    """Log start of an Agno per-document synthetic session."""
     body = (
         "synthetic session start "
         f"document_type={document_type} model={model_id} agent_mode=per_doc "
@@ -178,6 +179,7 @@ def log_agno_turn_start(
     prompt_kind: PromptKind,
     message_chars: int,
 ) -> None:
+    """Log an Agno turn before the model responds (initial or feedback)."""
     body = (
         f"agno turn start turn={turn}/{turn_budget} "
         f"prompt_kind={prompt_kind} message_chars={message_chars}"
@@ -201,6 +203,7 @@ def log_agno_turn_success(
     used_exactly_once: int,
     planned: int,
 ) -> None:
+    """Log successful validation after an Agno turn."""
     body = (
         f"synthetic session success turns={turn} text_len={text_len} "
         f"entities={used_exactly_once}/{planned}"

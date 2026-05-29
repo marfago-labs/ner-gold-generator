@@ -60,6 +60,8 @@ class EntitiesPerDocumentConfig:
 
 @dataclass(frozen=True, slots=True)
 class GeneratorConfig:
+    """Per-label options for structured surface generators (date, number, currency, …)."""
+
     formats: tuple[str, ...] = ()
     year_min: int = 2015
     year_max: int = 2026
@@ -105,7 +107,7 @@ class LlmSyntheticConfig:
 class SyntheticConfig:
     """Full synthetic dataset specification.
 
-    Top-level JSON may omit many fields; defaults apply (for example
+    Top-level YAML or JSON may omit many fields; defaults apply (for example
     ``text_length`` 200–800 chars, built-in ``label_weights`` when empty).
     Per-document genre profiles can override length and sampling; see
     :mod:`ner_gold_generator.document_profiles`.
@@ -129,6 +131,7 @@ class SyntheticConfig:
     llm: LlmSyntheticConfig = field(default_factory=LlmSyntheticConfig)
 
     def normalized_label_weights(self) -> dict[str, float]:
+        """Return label weights summing to 1.0 (built-in mix when ``label_weights`` is empty)."""
         if not self.label_weights:
             return {
                 "model": 0.15,

@@ -2,9 +2,9 @@
 
 Build **NER benchmark gold JSONL** from arXiv abstracts, YouTube transcripts, document folders, JSONL corpora, or **synthetic YAML configs** — with **manual** curation or **multi-sample LLM** labeling.
 
-Example configs: `configs/synthetic_*.yaml`, manual annotations: `docs/examples/manual-sample.yaml`.
+Example configs: `configs/synthetic_*.yaml` (all options: `configs/synthetic_reference.yaml`), manual annotations: `docs/examples/manual-sample.yaml`.
 
-Output is consumed by [ner-detector](https://github.com/marfago-labs/ner-detector) (`benchmark/datasets/*.jsonl`).
+Output is written to the sibling [ner-dataset](https://github.com/marfago-labs/ner-dataset) repo by default (`datasets/*.jsonl`); [ner-detector](https://github.com/marfago-labs/ner-detector) loads those files for benchmarks (with fallback to shipped `benchmark/datasets/`).
 
 ## Quick start
 

@@ -1,17 +1,15 @@
 """Backward-compatible CLI entry point for arXiv gold only.
 
 Exposes ``build-arxiv-gold``, which delegates to :func:`build_gold.main` with
-``--source arxiv`` and a default output path under ``ner-detector``.
+``--source arxiv`` and a default output path under the sibling ``ner-dataset`` repo.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from ner_gold_generator.build_gold import main as build_gold_main
+from ner_gold_generator.paths import default_output_path
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_OUTPUT = _REPO_ROOT.parent / "ner-detector" / "benchmark" / "datasets" / "arxiv_gold.jsonl"
+_DEFAULT_OUTPUT = default_output_path("arxiv_gold.jsonl")
 
 
 def _ensure_arxiv_argv(argv: list[str] | None) -> list[str]:

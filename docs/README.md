@@ -22,15 +22,16 @@ Build **NER benchmark gold datasets** (JSONL with character offsets) from arXiv 
 | File | Purpose |
 |------|---------|
 | [examples/manual-sample.yaml](examples/manual-sample.yaml) | Template for `--manual` annotations |
+| [../configs/synthetic_reference.yaml](../configs/synthetic_reference.yaml) | Annotated synthetic config (all options) |
 
 ## Quick start
 
 ```bash
 uv sync --extra dev
-uv run build-arxiv-gold          # arXiv manual gold → ner-detector by default
+uv run build-arxiv-gold          # arXiv manual gold → ../ner-dataset/datasets/ by default
 uv run build-gold --source synthetic \
   --synthetic-config configs/synthetic_smoke.yaml \
-  --output output/synthetic_gold.jsonl
+  --output ../ner-dataset/datasets/synthetic_gold.jsonl
 uv run build-gold --help
 ```
 

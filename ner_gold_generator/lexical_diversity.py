@@ -36,12 +36,14 @@ class LexicalDiversityStats:
 
     @property
     def distinct_1_mean(self) -> float:
+        """Mean per-document distinct-1 across the batch."""
         if not self.per_doc_distinct_1:
             return 0.0
         return sum(self.per_doc_distinct_1) / len(self.per_doc_distinct_1)
 
     @property
     def distinct_2_mean(self) -> float:
+        """Mean per-document distinct-2 across the batch."""
         if not self.per_doc_distinct_2:
             return 0.0
         return sum(self.per_doc_distinct_2) / len(self.per_doc_distinct_2)

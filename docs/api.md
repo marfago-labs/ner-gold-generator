@@ -14,6 +14,8 @@ Generate static HTML (writes `ner_gold_generator.html` in the current directory)
 python -m pydoc -w ner_gold_generator
 ```
 
+**Synthetic YAML:** every field is documented in [`configs/synthetic_reference.yaml`](../configs/synthetic_reference.yaml). **CLIs:** `build-gold` and `build-arxiv-gold` (`ner_gold_generator.build_gold.main`, `ner_gold_generator.build_arxiv.main`).
+
 ## Package overview
 
 | Module | Purpose |
@@ -32,6 +34,7 @@ python -m pydoc -w ner_gold_generator
 | `ner_gold_generator.types` | `ProposedEntity`, `ValidatedEntity` |
 | `ner_gold_generator.progress` | stderr / Rich progress helper |
 | `ner_gold_generator.env` | `load_project_env` |
+| `ner_gold_generator.paths` | `dataset_dir`, `default_output_path` (sibling `ner-dataset`) |
 | `ner_gold_generator.logger` | `get_logger` — structured logs to `gold.log` |
 | `ner_gold_generator.llm_logging` | Synthetic LLM trace logging and per-document log files |
 | `ner_gold_generator.synthetic_config` | `SyntheticConfig`, `load_synthetic_config` (YAML primary; JSON accepted) |

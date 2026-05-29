@@ -9,6 +9,7 @@ URL = "https://openrouter.ai/api/v1/models"
 
 
 def main() -> None:
+    """Fetch OpenRouter model list and print zero-priced models to stdout."""
     with urllib.request.urlopen(URL, timeout=30) as resp:
         data = json.load(resp)
     rows: list[tuple[str, int | None, str]] = []

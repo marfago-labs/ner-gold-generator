@@ -366,6 +366,7 @@ class PlanEntityUsageAudit:
     occurrence_counts: dict[str, int]
 
     def to_dict(self) -> dict[str, object]:
+        """JSON-serializable audit for ``synthetic_meta.entity_usage``."""
         return {
             "planned": self.planned,
             "used_exactly_once": self.used_exactly_once,
@@ -804,4 +805,5 @@ def config_summary_for_meta(config: SyntheticConfig) -> dict:
 
 
 def config_summary_json(config: SyntheticConfig) -> str:
+    """Compact JSON snapshot of :func:`config_summary_for_meta` for logging."""
     return json.dumps(config_summary_for_meta(config), sort_keys=True)

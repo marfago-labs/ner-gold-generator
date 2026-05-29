@@ -60,6 +60,7 @@ class SkippedDocument:
     error: str
 
     def to_dict(self) -> dict:
+        """Serialize for stderr skip summaries and structured logs."""
         return {
             "id": self.id,
             "document_index": self.document_index,

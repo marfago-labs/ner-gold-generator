@@ -37,7 +37,8 @@ When this repo sits next to `text-compressor` and `ner-detector`:
 marfago-labs/
   text-compressor/data/raw/arxiv/     ← default --input for --source arxiv
   text-compressor/data/raw/youtube/   ← default --input for --source youtube
-  ner-detector/benchmark/datasets/    ← default --output for build-arxiv-gold
+  ner-dataset/datasets/               ← default --output for build-arxiv-gold
+  ner-detector/benchmark/datasets/    ← shipped copies (fallback for benchmarks)
   ner-gold-generator/
 ```
 
@@ -52,20 +53,20 @@ uv run build-arxiv-gold
 # or: uv run build-gold --source arxiv --mode manual
 ```
 
-Writes `../ner-detector/benchmark/datasets/arxiv_gold.jsonl` by default.
+Writes `../ner-dataset/datasets/arxiv_gold.jsonl` by default.
 
 ### LLM gold with mock (no API key)
 
 ```bash
 uv run build-gold --source arxiv --mode llm --mock --limit 1 \
-  --output output/test_arxiv_llm.jsonl
+  --output ../ner-dataset/datasets/test_arxiv_llm.jsonl
 ```
 
 ### YouTube corpus (text-compressor raw JSON)
 
 ```bash
 uv run build-gold --source youtube --mode llm --mock \
-  --output output/youtube_gold.jsonl
+  --output ../ner-dataset/datasets/youtube_gold.jsonl
 ```
 
 ### Blog or docs in a folder (manual annotations required)
@@ -75,7 +76,7 @@ uv run build-gold --source folder \
   --input ./my-articles \
   --manual docs/examples/manual-sample.yaml \
   --mode manual \
-  --output output/blog_gold.jsonl
+  --output ../ner-dataset/datasets/blog_gold.jsonl
 ```
 
 ### Synthetic gold (no external corpus)
@@ -83,7 +84,7 @@ uv run build-gold --source folder \
 ```bash
 uv run build-gold --source synthetic \
   --synthetic-config configs/synthetic_smoke.yaml \
-  --output output/synthetic_gold.jsonl
+  --output ../ner-dataset/datasets/synthetic_gold.jsonl
 ```
 
 See [Synthetic generation](synthetic.md) for LLM configs, document profiles, and per-document logs.
@@ -93,7 +94,7 @@ See [Synthetic generation](synthetic.md) for LLM configs, document profiles, and
 | Command | Role |
 |---------|------|
 | `build-gold` | Unified CLI (`--source`, `--input`, …) |
-| `build-arxiv-gold` | Shortcut: `--source arxiv`, default ner-detector output path |
+| `build-arxiv-gold` | Shortcut: `--source arxiv`, default `ner-dataset` output path |
 
 ## Next steps
 

@@ -20,9 +20,15 @@ htmlcov/
 .env
 .env.local
 
-# Generated datasets (copy into ner-detector manually)
+# Local scratch output (default gold goes to sibling ../ner-dataset/datasets/)
 output/
 gold.log
+
+# Synthetic LLM traces (may contain prompts/responses; never commit)
+configs/logs_tmp/
+**/logs_tmp/
+*.db
+.agno/
 
 # OS & editors
 .DS_Store

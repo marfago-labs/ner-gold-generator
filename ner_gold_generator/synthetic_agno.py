@@ -75,7 +75,9 @@ class AgnoAgentProtocol(Protocol):
         *,
         session_id: str | None = None,
         user_id: str | None = None,
-    ) -> object: ...
+    ) -> object:
+        """Run one synchronous agent turn (Agno ``Agent.run`` shape)."""
+        ...
 
     async def arun(
         self,
@@ -83,10 +85,13 @@ class AgnoAgentProtocol(Protocol):
         *,
         session_id: str | None = None,
         user_id: str | None = None,
-    ) -> object: ...
+    ) -> object:
+        """Run one async agent turn (Agno ``Agent.arun`` shape)."""
+        ...
 
 
 def verify_agno_installation() -> None:
+    """Raise :class:`ImportError` when Agno or SQLAlchemy extras are missing."""
     if Agent is None:
         raise ImportError(
             "Agno is required for llm.agent_mode=per_doc. Install with: uv sync --extra llm"
