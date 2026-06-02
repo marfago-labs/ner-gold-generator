@@ -18,7 +18,14 @@ Output is written to the sibling [ner-dataset](https://github.com/marfago-labs/n
 
 ```bash
 uv sync --extra dev
-uv run build-arxiv-gold    # regenerate arxiv_gold.jsonl (manual, default paths)
+
+# 1. Regenerate arXiv manual gold (the legacy benchmark)
+uv run build-arxiv-gold
+
+# 2. Generate a 100-document procedural synthetic dataset
+uv run build-gold --source synthetic \
+  --synthetic-config configs/synthetic_mixed.yaml \
+  --output ../ner-dataset/datasets/synthetic_mixed.jsonl
 ```
 
 ## Documentation
