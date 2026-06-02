@@ -6,6 +6,14 @@ Example configs: `configs/synthetic_*.yaml` (all options: `configs/synthetic_ref
 
 Output is written to the sibling [ner-dataset](https://github.com/marfago-labs/ner-dataset) repo by default (`datasets/*.jsonl`); [ner-detector](https://github.com/marfago-labs/ner-detector) loads those files for benchmarks (with fallback to shipped `benchmark/datasets/`).
 
+## Technical highlights
+
+- **Entity-first synthetic generation:** plan entities and labels first, then generate text around required surfaces.
+- **Deterministic offsets:** compute `start`/`end` from exact unique span anchoring in source text (no trust in model offsets).
+- **Consensus labeling for corpora:** multi-sample LLM extraction with majority vote before validation.
+- **Self-correcting generation loop:** retry and feedback budgets for provider failures and validation failures.
+- **Production safeguards:** strict allow-list labels, anti-hallucination validation, CI checks, and reproducible config-driven runs.
+
 ## Quick start
 
 ```bash
