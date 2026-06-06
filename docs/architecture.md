@@ -10,7 +10,7 @@ ner_gold_generator/
   build_arxiv.py       Thin wrapper (arxiv defaults)
   sources.py           Load arxiv / youtube / folder / jsonl → SourceDocument
   manual.py            Resolve manual spans (YAML/JSON file + built-in arXiv)
-  manual_entities.py   Curated arXiv benchmark spans
+  manual_entities.py   Load arXiv benchmark spans from configs/arxiv_benchmark.yaml
   labeling.py          LLM multi-sample consensus orchestration
   llm_client.py        OpenRouter + mock chat clients (sync and async)
   consensus.py         Majority vote on (text, label) pairs
@@ -46,7 +46,7 @@ flowchart TB
     SD[SourceDocument list]
   end
   subgraph label [Labeling]
-    M[manual.py + manual_entities]
+    M[manual.py + configs/arxiv_benchmark.yaml]
     L[labeling.py + llm_client]
   end
   subgraph out [Output]

@@ -1,0 +1,125 @@
+# Built-in arXiv benchmark manual spans (default for build-arxiv-gold manual mode).
+#
+# Guidelines (salient-entity gold for scientific NER):
+# - Prefer canonical surfaces models should emit ("Transformer", "ImageNet", "SuperGLUE")
+# - Use `match` when the canonical text is ambiguous or embedded in a longer phrase
+# - benchmark: named benchmark / challenge / eval task; dataset: named corpus;
+#   metric: reported score with units; method: technique or training procedure
+
+paper_order:
+  - "1706.03762"
+  - "1512.03385"
+  - "2010.11929"
+  - "2103.00020"
+  - "2005.14165"
+  - "1312.6114"
+  - "1810.04805"
+  - "1409.0473"
+  - "1606.05328"
+  - "1905.00537"
+
+papers:
+  "1706.03762":
+    - text: "Transformer"
+      label: model
+      match: "network architecture, the Transformer"
+    - text: "28.4 BLEU"
+      label: metric
+    - text: "WMT 2014 English-to-German translation task"
+      label: benchmark
+    - text: "WMT 2014 English-to-French translation task"
+      label: benchmark
+    - text: "41.8"
+      label: number
+  "1512.03385":
+    - text: "ImageNet"
+      label: dataset
+      match: "On the ImageNet dataset"
+    - text: "VGG nets"
+      label: model
+    - text: "ILSVRC 2015"
+      label: benchmark
+    - text: "CIFAR-10"
+      label: dataset
+    - text: "COCO detection"
+      label: benchmark
+    - text: "3.57%"
+      label: number
+  "2010.11929":
+    - text: "Vision Transformer (ViT)"
+      label: model
+    - text: "CNNs"
+      label: model
+    - text: "ImageNet"
+      label: dataset
+    - text: "CIFAR-100"
+      label: dataset
+    - text: "VTAB"
+      label: benchmark
+    - text: "pure transformer"
+      label: method
+      match: "a pure transformer"
+  "2103.00020":
+    - text: "CLIP"
+      label: model
+    - text: "ResNet-50"
+      label: model
+    - text: "ImageNet"
+      label: dataset
+    - text: "400 million"
+      label: number
+    - text: "OpenAI"
+      label: organization
+  "2005.14165":
+    # "GPT-3" appears 7× in the abstract; match disambiguates the results mention.
+    - text: "GPT-3"
+      label: model
+      match: "GPT-3 achieves"
+    - text: "175 billion"
+      label: number
+    - text: "autoregressive language model"
+      label: method
+  "1312.6114":
+    - text: "stochastic variational inference"
+      label: method
+    - text: "stochastic gradient"
+      label: method
+  "1810.04805":
+    - text: "BERT"
+      label: model
+      match: "called BERT"
+    - text: "GLUE"
+      label: benchmark
+      match: "GLUE score"
+    - text: "MultiNLI"
+      label: dataset
+    - text: "SQuAD v1.1"
+      label: dataset
+    - text: "80.5%"
+      label: number
+  "1409.0473":
+    - text: "English-to-French"
+      label: benchmark
+    - text: "statistical machine translation"
+      label: method
+    - text: "Neural machine translation"
+      label: method
+    - text: "encoder-decoder"
+      label: model
+      match: "family of encoder-decoders"
+  "1606.05328":
+    - text: "PixelCNN"
+      label: model
+      match: "PixelCNN architecture"
+    - text: "ImageNet"
+      label: dataset
+      match: "ImageNet database"
+    - text: "PixelRNN"
+      label: model
+  "1905.00537":
+    - text: "GLUE"
+      label: benchmark
+      match: "GLUE benchmark"
+    - text: "SuperGLUE"
+      label: benchmark
+      match: "present SuperGLUE"

@@ -4,38 +4,48 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
 
 import ner_gold_generator.manual_entities as arxiv_manual
+from ner_gold_generator.manual_spans import ManualSpan, index_manual_span, parse_span_list
+
+__all__ = [
+    "ManualSpan",
+    "builtin_arxiv_annotations",
+    "index_manual_span",
+    "load_manual_annotations",
+    "parse_span_list",
+    "resolve_manual_spans",
+]
 
 
-def builtin_arxiv_annotations() -> dict[str, list[tuple[str, str]]]:
+def builtin_arxiv_annotations() -> dict[str, list[ManualSpan]]:
     """Return built-in arXiv benchmark spans keyed by bare arXiv id.
 
     Returns:
-        Copy of :data:`manual_entities.PAPER_ENTITIES`.
+        Copy of spans from ``configs/arxiv_benchmark.yaml``.
     """
-    return dict(arxiv_manual.PAPER_ENTITIES)
+    return {key: list(spans) for key, spans in arxiv_manual.PAPER_ENTITIES.items()}
 
 
-def load_manual_annotations(path: Path | None) -> dict[str, list[tuple[str, str]]]:
+def load_manual_annotations(path: Path | None) -> dict[str, list[ManualSpan]]:
     """Load manual spans from a JSON or YAML file.
 
     File format: mapping from document id to a list of objects with ``text`` and
-    ``label`` keys. Keys may be full ids (``arxiv-1706.03762``) or bare arXiv ids.
+    ``label`` keys. Optional ``match`` disambiguates when ``text`` is not unique.
+    Keys may be full ids (``arxiv-1706.03762``) or bare arXiv ids.
 
     Args:
         path: Annotation file path, or ``None`` for an empty mapping.
 
     Returns:
-        Document id → list of ``(surface, label)`` tuples.
+        Document id → list of :class:`ManualSpan` entries.
 
     Raises:
         FileNotFoundError: If *path* is set but not a file.
         ImportError: If the file is YAML and PyYAML is not installed.
         ValueError: If the file structure is invalid.
     """
-    out: dict[str, list[tuple[str, str]]] = {}
+    out: dict[str, list[ManualSpan]] = {}
     if path is None:
         return out
     if not path.is_file():
@@ -54,33 +64,17 @@ def load_manual_annotations(path: Path | None) -> dict[str, list[tuple[str, str]
     if not isinstance(raw, dict):
         raise ValueError(f"Manual annotations must be a mapping in {path}")
     for key, value in raw.items():
-        spans = _parse_span_list(value, doc_key=str(key))
+        spans = parse_span_list(value, doc_key=str(key))
         out[str(key)] = spans
     return out
-
-
-def _parse_span_list(value: Any, *, doc_key: str) -> list[tuple[str, str]]:
-    """Parse one document's span list from manual annotation JSON."""
-    if not isinstance(value, list):
-        raise ValueError(f"Manual spans for {doc_key!r} must be a list")
-    spans: list[tuple[str, str]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise ValueError(f"Invalid span entry for {doc_key!r}")
-        text = item.get("text")
-        label = item.get("label")
-        if not isinstance(text, str) or not isinstance(label, str):
-            raise ValueError(f"Span needs text and label for {doc_key!r}")
-        spans.append((text.strip(), label.strip()))
-    return spans
 
 
 def resolve_manual_spans(
     doc_id: str,
     *,
     source: str,
-    file_annotations: dict[str, list[tuple[str, str]]],
-) -> list[tuple[str, str]] | None:
+    file_annotations: dict[str, list[ManualSpan]],
+) -> list[ManualSpan] | None:
     """Resolve manual spans for a document id.
 
     Lookup order: exact *doc_id* in *file_annotations*, bare arXiv id in file,

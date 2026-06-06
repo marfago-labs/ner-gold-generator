@@ -22,7 +22,7 @@ Gold entities are produced in one of two modes: **`manual`** (human-curated span
 uv run build-gold --source arxiv --mode manual
 ```
 
-Uses `ner_gold_generator/manual_entities.py`: for each paper in `PAPER_ORDER`, curated `(surface text, label)` pairs are located in the abstract and written with `start`/`end` offsets.
+Uses `configs/arxiv_benchmark.yaml`: for each paper in `paper_order`, curated `(surface text, label)` pairs are located in the abstract and written with `start`/`end` offsets.
 
 Spans must appear **exactly once** in the abstract; otherwise generation fails for that surface.
 

@@ -32,7 +32,7 @@ One file per paper: `{arxiv_id}.json`.
 
 **Document id:** `arxiv-{arxiv_id}` (e.g. `arxiv-1706.03762`).
 
-**Manual mode:** Built-in curated spans in `ner_gold_generator/manual_entities.py` for ten benchmark papers (used when `--manual` is omitted and source is `arxiv`).
+**Manual mode:** Built-in curated spans in `configs/arxiv_benchmark.yaml` for ten benchmark papers (used when `--manual` is omitted and source is `arxiv`).
 
 ---
 
@@ -110,4 +110,4 @@ Example corpus:
 
 - Files are processed in **sorted path order** (folder/arXiv/YouTube) or **file line order** (jsonl)
 - `--limit N` keeps only the first **N** documents after loading
-- For arXiv **manual** mode without `--manual`, only papers listed in `manual_entities.PAPER_ORDER` are emitted (built-in benchmark set)
+- For arXiv **manual** mode without `--manual`, only papers listed in `configs/arxiv_benchmark.yaml` `paper_order` are emitted (built-in benchmark set)

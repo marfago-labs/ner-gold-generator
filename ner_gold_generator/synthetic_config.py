@@ -3,6 +3,8 @@
 Repository layout (relative to the package root)::
 
     configs/
+      arxiv_benchmark.yaml        # built-in arXiv manual spans
+      synthetic_defaults.yaml     # default procedural templates + lexicon
       synthetic_llm.yaml          # example batch spec
       prompts/                    # LLM prompt templates (not inlined in Python)
         synthetic_llm_system_prompt.txt
@@ -162,23 +164,53 @@ class SyntheticConfig:
         return self.domain.strip() or "scientific_abstract"
 
 
-_DEFAULT_TEMPLATES = (
-    "We propose {e0} and evaluate it on {e1}, achieving {e2} on the {e3} benchmark.",
-    "Compared with {e0}, our approach on {e1} improves {e2} as measured by {e3}.",
-    "Experiments on {e0} using {e1} report {e2} for the {e3} task in {e4}.",
-    "The method {e0} was tested on {e1}; results include {e2} and {e3} from {e4}.",
-)
+_REPO_ROOT = Path(__file__).resolve().parent.parent
+_DEFAULT_SYNTHETIC_DEFAULTS_PATH = _REPO_ROOT / "configs" / "synthetic_defaults.yaml"
 
-_DEFAULT_LEXICON: dict[str, tuple[str, ...]] = {
-    "model": ("Transformer", "BERT", "GPT-3", "ResNet", "ViT"),
-    "dataset": ("ImageNet", "CIFAR-10", "GLUE", "SQuAD", "WMT 2014"),
-    "benchmark": ("WMT 2014 English-to-German", "SQuAD", "GLUE", "ImageNet"),
-    "metric": ("28.4 BLEU", "F1 score", "accuracy", "perplexity"),
-    "organization": ("OpenAI", "Google", "Meta", "Microsoft"),
-    "method": ("fine-tuning", "pre-training", "attention mechanism"),
-    "person": ("Geoffrey Hinton", "Yann LeCun"),
-    "location": ("United States", "Europe"),
-}
+
+def default_synthetic_defaults_path(*, repo_root: Path | None = None) -> Path:
+    """Return ``configs/synthetic_defaults.yaml`` under the repository root."""
+    root = repo_root or _REPO_ROOT
+    return root / "configs" / "synthetic_defaults.yaml"
+
+
+def load_synthetic_defaults(
+    path: Path | None = None,
+) -> tuple[tuple[str, ...], dict[str, tuple[str, ...]]]:
+    """Load default procedural templates and lexicon from YAML.
+
+    Raises:
+        FileNotFoundError: If the defaults file is missing.
+        ValueError: If the file structure is invalid.
+    """
+    config_path = path or _DEFAULT_SYNTHETIC_DEFAULTS_PATH
+    if not config_path.is_file():
+        raise FileNotFoundError(f"Synthetic defaults config not found: {config_path}")
+    try:
+        import yaml
+    except ImportError as exc:
+        raise ImportError("PyYAML is required for synthetic defaults: pip install pyyaml") from exc
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError(f"Synthetic defaults must be a mapping: {config_path}")
+
+    templates_raw = raw.get("templates", ())
+    if not isinstance(templates_raw, list) or not templates_raw:
+        raise ValueError(f"templates must be a non-empty list in {config_path}")
+    templates = tuple(str(t) for t in templates_raw)
+
+    lexicon_raw = raw.get("lexicon", {}) or {}
+    if not isinstance(lexicon_raw, dict) or not lexicon_raw:
+        raise ValueError(f"lexicon must be a non-empty mapping in {config_path}")
+    lexicon: dict[str, tuple[str, ...]] = {}
+    for label, values in lexicon_raw.items():
+        if not isinstance(values, list) or not values:
+            raise ValueError(f"lexicon[{label!r}] must be a non-empty list in {config_path}")
+        lexicon[str(label)] = tuple(str(v) for v in values)
+    return templates, lexicon
+
+
+_DEFAULT_TEMPLATES, _DEFAULT_LEXICON = load_synthetic_defaults()
 
 
 def _parse_text_length(raw: dict[str, Any]) -> TextLengthConfig:

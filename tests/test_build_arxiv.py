@@ -370,6 +370,60 @@ def test_load_project_env_without_dotenv(tmp_path: Path, monkeypatch: pytest.Mon
     env_module._ENV_LOADED = False
 
 
+def test_build_manual_gpt3_match_disambiguation(tmp_path: Path) -> None:
+    """Duplicate 'GPT-3' in text requires match= in manual YAML."""
+    abstract = (
+        "We train GPT-3 early. For all tasks, GPT-3 is applied. GPT-3 achieves strong performance."
+    )
+    arxiv_dir = tmp_path / "arxiv"
+    arxiv_dir.mkdir()
+    (arxiv_dir / "2005.14165.json").write_text(
+        json.dumps({"arxiv_id": "2005.14165", "abstract": abstract}),
+        encoding="utf-8",
+    )
+    manual = tmp_path / "spans.yaml"
+    manual.write_text(
+        "2005.14165:\n  - text: GPT-3\n    label: model\n    match: GPT-3 achieves\n",
+        encoding="utf-8",
+    )
+    docs = build_gold_mod.load_documents("arxiv", arxiv_dir)
+    examples = build_gold_mod.build_examples_manual(
+        docs,
+        source="arxiv",
+        manual_path=manual,
+        progress=Progress(quiet=True),
+    )
+    assert len(examples) == 1
+    model_ent = next(e for e in examples[0]["entities"] if e["label"] == "model")
+    assert model_ent["text"] == "GPT-3"
+    assert abstract[model_ent["start"] : model_ent["end"]] == "GPT-3"
+    assert abstract[model_ent["start"] : model_ent["start"] + len("GPT-3 achieves")] == (
+        "GPT-3 achieves"
+    )
+
+
+def test_build_manual_duplicate_gpt3_without_match_fails(tmp_path: Path) -> None:
+    abstract = "GPT-3 here. GPT-3 there."
+    arxiv_dir = tmp_path / "arxiv"
+    arxiv_dir.mkdir()
+    (arxiv_dir / "2005.14165.json").write_text(
+        json.dumps({"arxiv_id": "2005.14165", "abstract": abstract}),
+        encoding="utf-8",
+    )
+    manual = tmp_path / "spans.yaml"
+    manual.write_text(
+        "2005.14165:\n  - text: GPT-3\n    label: model\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="not found or not unique"):
+        build_gold_mod.build_examples_manual(
+            build_gold_mod.load_documents("arxiv", arxiv_dir),
+            source="arxiv",
+            manual_path=manual,
+            progress=Progress(quiet=True),
+        )
+
+
 def test_manual_bad_surface_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     arxiv_dir = tmp_path / "arxiv"
     arxiv_dir.mkdir()

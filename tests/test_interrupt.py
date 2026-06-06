@@ -82,7 +82,12 @@ def test_build_examples_manual_keyboard_interrupt(monkeypatch: pytest.MonkeyPatc
         SourceDocument(doc_id="d1", text="Alice works at OpenAI.", source="folder"),
         SourceDocument(doc_id="d2", text="Bob uses BERT.", source="folder"),
     ]
-    manual = {"d1": [("OpenAI", "ORG")], "d2": [("BERT", "MODEL")]}
+    from ner_gold_generator.manual import ManualSpan
+
+    manual = {
+        "d1": [ManualSpan("OpenAI", "organization")],
+        "d2": [ManualSpan("BERT", "model")],
+    }
 
     def _resolve(doc_id: str, **kwargs: object) -> list | None:
         del kwargs

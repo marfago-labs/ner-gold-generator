@@ -29,27 +29,22 @@ from ner_gold_generator.labeling import (
     label_text_with_llm_consensus,
 )
 from ner_gold_generator.llm_client import LlmRequestError
-from ner_gold_generator.manual import load_manual_annotations, resolve_manual_spans
+from ner_gold_generator.manual import (
+    index_manual_span,
+    load_manual_annotations,
+    resolve_manual_spans,
+)
 from ner_gold_generator.paths import default_output_path
 from ner_gold_generator.progress import Progress
 from ner_gold_generator.sources import SourceDocument, default_input_dir, load_documents
 from ner_gold_generator.synthetic import build_examples_from_config_path
-from ner_gold_generator.validate import index_unique_span
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_OUTPUT = default_output_path("arxiv_gold.jsonl")
 
 
-def _index_entity(text: str, surface: str) -> tuple[int, int]:
-    """Anchor *surface* in *text* or raise if not uniquely found."""
-    span = index_unique_span(text, surface)
-    if span is None:
-        raise ValueError(f"Surface {surface!r} not found or not unique in text")
-    return span
-
-
 def _filter_arxiv_builtin_order(docs: list[SourceDocument]) -> list[SourceDocument]:
-    """Keep only built-in benchmark papers in :data:`manual_entities.PAPER_ORDER`."""
+    """Keep only built-in benchmark papers in ``configs/arxiv_benchmark.yaml`` order."""
     by_id = {doc.doc_id: doc for doc in docs}
     filtered: list[SourceDocument] = []
     for arxiv_id in arxiv_manual.PAPER_ORDER:
@@ -69,7 +64,7 @@ def build_examples_manual(
     """Build gold example dicts from manual span tables.
 
     For ``source=arxiv`` without ``manual_path``, uses built-in spans and
-    :data:`manual_entities.PAPER_ORDER`. Documents without manual spans are
+    ``configs/arxiv_benchmark.yaml`` paper order. Documents without manual spans are
     skipped.
 
     Args:
@@ -106,9 +101,11 @@ def build_examples_manual(
                     tick(done, f"{doc.doc_id} skipped (no manual spans)")
                     continue
                 entities = []
-                for surface, label in spans:
-                    start, end = _index_entity(doc.text, surface)
-                    entities.append({"text": surface, "label": label, "start": start, "end": end})
+                for span in spans:
+                    start, end = index_manual_span(doc.text, span)
+                    entities.append(
+                        {"text": span.text, "label": span.label, "start": start, "end": end}
+                    )
                 row: dict = {
                     "id": doc.doc_id,
                     "text": doc.text,

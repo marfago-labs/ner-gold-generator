@@ -8,9 +8,11 @@ from pathlib import Path
 import pytest
 
 from ner_gold_generator.manual import (
+    ManualSpan,
     load_manual_annotations,
     resolve_manual_spans,
 )
+from ner_gold_generator.manual_entities import PAPER_ENTITIES
 
 
 def test_resolve_builtin_arxiv() -> None:
@@ -20,7 +22,7 @@ def test_resolve_builtin_arxiv() -> None:
         file_annotations={},
     )
     assert spans is not None
-    assert any(s[1] == "model" for s in spans)
+    assert any(s.label == "model" for s in spans)
 
 
 def test_load_manual_json(tmp_path: Path) -> None:
@@ -34,7 +36,7 @@ def test_load_manual_json(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     ann = load_manual_annotations(path)
-    assert ann["doc-1"] == [("A", "model")]
+    assert ann["doc-1"] == [ManualSpan("A", "model")]
 
 
 def test_load_manual_missing(tmp_path: Path) -> None:
@@ -50,8 +52,10 @@ def test_load_manual_invalid_shape(tmp_path: Path) -> None:
 
 
 def test_resolve_manual_file_key(tmp_path: Path) -> None:
-    ann = {"doc-1": [("A", "model")]}
-    assert resolve_manual_spans("doc-1", source="folder", file_annotations=ann) == [("A", "model")]
+    ann = {"doc-1": [ManualSpan("A", "model")]}
+    assert resolve_manual_spans("doc-1", source="folder", file_annotations=ann) == [
+        ManualSpan("A", "model")
+    ]
 
 
 def test_load_manual_none_returns_empty() -> None:
@@ -91,9 +95,9 @@ def test_load_manual_top_level_not_mapping(tmp_path: Path) -> None:
 
 
 def test_resolve_manual_bare_arxiv_key() -> None:
-    ann = {"1706.03762": [("Transformer", "model")]}
+    ann = {"1706.03762": [ManualSpan("Transformer", "model")]}
     spans = resolve_manual_spans("arxiv-1706.03762", source="arxiv", file_annotations=ann)
-    assert spans == [("Transformer", "model")]
+    assert spans == [ManualSpan("Transformer", "model")]
 
 
 def test_resolve_manual_invalid_span_type(tmp_path: Path) -> None:
@@ -103,6 +107,49 @@ def test_resolve_manual_invalid_span_type(tmp_path: Path) -> None:
         load_manual_annotations(path)
 
 
+def test_load_manual_yaml_with_match_field(tmp_path: Path) -> None:
+    path = tmp_path / "m.yaml"
+    path.write_text(
+        "arxiv-2005.14165:\n  - text: GPT-3\n    label: model\n    match: GPT-3 achieves\n",
+        encoding="utf-8",
+    )
+    ann = load_manual_annotations(path)
+    assert ann["arxiv-2005.14165"] == [ManualSpan("GPT-3", "model", match="GPT-3 achieves")]
+
+
+def test_resolve_manual_file_overrides_builtin() -> None:
+    file_ann = {
+        "1706.03762": [ManualSpan("OVERRIDE", "model")],
+    }
+    spans = resolve_manual_spans(
+        "arxiv-1706.03762",
+        source="arxiv",
+        file_annotations=file_ann,
+    )
+    assert spans == [ManualSpan("OVERRIDE", "model")]
+
+
+def test_resolve_manual_unknown_doc_returns_none() -> None:
+    assert (
+        resolve_manual_spans(
+            "arxiv-9999.99999",
+            source="arxiv",
+            file_annotations={},
+        )
+        is None
+    )
+
+
+def test_builtin_arxiv_annotations_returns_mutable_copy() -> None:
+    from ner_gold_generator.manual import builtin_arxiv_annotations
+
+    first = builtin_arxiv_annotations()
+    second = builtin_arxiv_annotations()
+    assert first is not second
+    first["1706.03762"].append(ManualSpan("X", "model"))
+    assert len(second["1706.03762"]) == len(PAPER_ENTITIES["1706.03762"])
+
+
 def test_load_manual_yaml(tmp_path: Path) -> None:
     path = tmp_path / "m.yaml"
     path.write_text(
@@ -110,4 +157,4 @@ def test_load_manual_yaml(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     ann = load_manual_annotations(path)
-    assert ann["doc-1"] == [("YAMLSpan", "model")]
+    assert ann["doc-1"] == [ManualSpan("YAMLSpan", "model")]

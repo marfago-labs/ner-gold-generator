@@ -1,0 +1,46 @@
+# Default procedural synthetic templates and lexicon (merged when YAML omits them).
+
+templates:
+  - "We propose {e0} and evaluate it on {e1}, achieving {e2} on the {e3} benchmark."
+  - "Compared with {e0}, our approach on {e1} improves {e2} as measured by {e3}."
+  - "Experiments on {e0} using {e1} report {e2} for the {e3} task in {e4}."
+  - "The method {e0} was tested on {e1}; results include {e2} and {e3} from {e4}."
+
+lexicon:
+  model:
+    - Transformer
+    - BERT
+    - GPT-3
+    - ResNet
+    - ViT
+  dataset:
+    - ImageNet
+    - CIFAR-10
+    - GLUE
+    - SQuAD
+    - "WMT 2014"
+  benchmark:
+    - "WMT 2014 English-to-German"
+    - SQuAD
+    - GLUE
+    - ImageNet
+  metric:
+    - "28.4 BLEU"
+    - F1 score
+    - accuracy
+    - perplexity
+  organization:
+    - OpenAI
+    - Google
+    - Meta
+    - Microsoft
+  method:
+    - fine-tuning
+    - pre-training
+    - attention mechanism
+  person:
+    - Geoffrey Hinton
+    - Yann LeCun
+  location:
+    - United States
+    - Europe

@@ -25,7 +25,7 @@ python -m pydoc -w ner_gold_generator
 | `ner_gold_generator.build_arxiv` | `build-arxiv-gold` wrapper around `build_gold.main` |
 | `ner_gold_generator.sources` | `SourceDocument`, `load_documents`, `SUPPORTED_SOURCES` |
 | `ner_gold_generator.manual` | Manual span files (YAML/JSON) and built-in arXiv table |
-| `ner_gold_generator.manual_entities` | Curated arXiv benchmark spans (`PAPER_ORDER`, `PAPER_ENTITIES`) |
+| `ner_gold_generator.manual_entities` | Load arXiv benchmark spans from `configs/arxiv_benchmark.yaml` |
 | `ner_gold_generator.labeling` | LLM multi-pass labeling and settings |
 | `ner_gold_generator.llm_client` | `OpenRouterChatClient`, `AsyncOpenRouterChatClient`, `MockChatClient` |
 | `ner_gold_generator.consensus` | `consensus_entities` majority vote |
