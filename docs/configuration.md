@@ -4,6 +4,16 @@ Configuration is via **environment variables** and an optional **`.env`** file i
 
 Copy `.env.example` to `.env` and edit locally. Do not commit secrets — CI and pre-commit run [Gitleaks](development.md#secret-scanning-gitleaks) to block accidental key commits.
 
+### Which keys you need
+
+| Task | Required | Optional |
+|------|----------|----------|
+| Manual arXiv gold, procedural synthetic | — | — |
+| Synthetic `engine: llm` | `OPENROUTER_API_KEY` | model in YAML `llm.model` |
+| Corpus labeling `build-gold --mode llm` | `OPENROUTER_API_KEY`, `LLM_GOLD_MODEL` | sampling vars below |
+
+Obtain OpenRouter key: [openrouter.ai/keys](https://openrouter.ai/keys).
+
 ## OpenRouter (LLM mode)
 
 | Variable | Default | Description |

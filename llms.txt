@@ -1,0 +1,27 @@
+# ner-gold-generator — NER gold JSONL pipeline (marfago-labs)
+
+> Build benchmark gold with deterministic offsets. Upstream of ner-dataset and ner-detector.
+
+## Start here
+
+- docs/README.md — documentation index
+- docs/for-agents.md — offline/LLM tasks, schema links
+- docs/portfolio.md — portfolio brief (upstream)
+- README.md — quick start, technical highlights
+
+## Contracts
+
+- docs/configuration.md — `.env`, API keys (`OPENROUTER_API_KEY`, `LLM_GOLD_MODEL`)
+- docs/gold-schema.md — JSONL fields and invariants
+- configs/synthetic_reference.yaml — annotated synthetic config (all options)
+- configs/arxiv_benchmark.yaml — manual arXiv benchmark
+
+## Offline smoke gold
+
+uv sync --extra dev
+uv run build-gold --source synthetic --synthetic-config configs/synthetic_smoke.yaml --output /tmp/synthetic_smoke.jsonl
+
+## Sibling repos
+
+- https://github.com/marfago-labs/ner-dataset — artifact store (llms.txt)
+- https://github.com/marfago-labs/ner-detector — benchmarks (llms.txt)

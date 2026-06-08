@@ -22,11 +22,34 @@ uv sync --extra dev
 # 1. Regenerate arXiv manual gold (the legacy benchmark)
 uv run build-arxiv-gold
 
-# 2. Generate a 100-document procedural synthetic dataset
+# 2. Offline smoke gold (3 docs, procedural — no API)
+uv run build-gold --source synthetic \
+  --synthetic-config configs/synthetic_smoke.yaml \
+  --output /tmp/synthetic_smoke.jsonl
+
+# 3. Full LLM synthetic batch (requires --extra llm + OPENROUTER_API_KEY)
 uv run build-gold --source synthetic \
   --synthetic-config configs/synthetic_mixed.yaml \
   --output ../ner-dataset/datasets/synthetic_mixed.jsonl
 ```
+
+## API keys and `.env`
+
+Manual arXiv gold and **procedural** synthetic runs need **no API keys**.
+
+| What you run | Keys needed |
+|--------------|-------------|
+| `build-arxiv-gold`, procedural synthetic (`engine: procedural`) | None |
+| Synthetic or corpus **LLM** mode (`engine: llm`, `build-gold --mode llm`) | [`OPENROUTER_API_KEY`](https://openrouter.ai/keys) + `LLM_GOLD_MODEL` (for corpus LLM) + `uv sync --extra llm` |
+
+Local setup:
+
+```bash
+cp .env.example .env
+# Edit .env — set OPENROUTER_API_KEY and LLM_GOLD_MODEL when using live LLM
+```
+
+Never commit `.env`. Full variable list: [docs/configuration.md](docs/configuration.md).
 
 ## Documentation
 
@@ -44,6 +67,7 @@ Full guides: **[docs/README.md](docs/README.md)**
 | Architecture | [docs/architecture.md](docs/architecture.md) |
 | Tests, CI, pre-commit | [docs/development.md](docs/development.md) |
 | Python API (pydoc) | [docs/api.md](docs/api.md) |
+| Coding agents | [docs/for-agents.md](docs/for-agents.md) |
 
 ## Quality
 
